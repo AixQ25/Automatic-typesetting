@@ -30,14 +30,14 @@ class DxfWriter:
         self.target_doc = None
     
     def write_multi_group_results(self, results: Dict, output_path: str,
-                                  gap: float = 20.0, unit_map: Dict = None) -> bool:
+                                  gap: float = 50.0, unit_map: Dict = None) -> bool:
         """
         写入多组排版结果到DXF文件
         
         Args:
             results: Dict[float, NestingResult] 按厚度分组的排版结果
             output_path: 输出文件路径
-            gap: 组间距 (mm)
+            gap: 组间距 (mm)，默认50mm
             unit_map: Dict[str, ShapeUnit] 单元映射（可选，用于保留内部结构）
             
         Returns:
@@ -76,18 +76,8 @@ class DxfWriter:
                 # 计算本组最大宽度
                 max_board_width = max(b.width for b in result.boards)
                 
-                # 添加厚度标签
-                msp.add_text(
-                    f"{thickness}mm",
-                    dxfattribs={
-                        'layer': layer_name,
-                        'height': 10,
-                        'insert': (x_offset + max_board_width / 2, 20)
-                    }
-                )
-                
                 # 绘制每个板材
-                y_offset = 0
+                y_offset = 50  # 顶部留50mm边距，方便操作
                 
                 for board_idx, board in enumerate(result.boards):
                     # 板材边框
@@ -103,13 +93,13 @@ class DxfWriter:
                         (x0, y0),
                     ], dxfattribs={'layer': layer_name})
                     
-                    # 添加板材标签
+                    # 添加板材标签（格式：长*宽*厚，在框的上方）
                     msp.add_text(
-                        f"{board.name}",
+                        f"{board.width:.0f}*{board.height:.0f}*{thickness}",
                         dxfattribs={
                             'layer': layer_name,
-                            'height': 5,
-                            'insert': (x0 + 5, y0 + board.height + 5)
+                            'height': 15,  # 字体高度15mm
+                            'insert': (x0 + board.width / 2, y0 + board.height + 10)
                         }
                     )
                     
@@ -118,8 +108,8 @@ class DxfWriter:
                         self._draw_placement_with_unit(msp, p, x0, y0, 
                                                      layer_name, unit_map)
                     
-                    # 更新Y偏移
-                    y_offset += board.height + gap
+                    # 更新Y偏移（板材间距改为50mm）
+                    y_offset += board.height + 50
                 
                 # 更新X偏移
                 x_offset += max_board_width + gap
