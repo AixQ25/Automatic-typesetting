@@ -5,6 +5,7 @@ DXF文件写入器
 
 import os
 import sys
+import math
 from typing import List, Tuple, Optional, Dict
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -288,7 +289,16 @@ class DxfWriter:
                 return coords
             
             elif dxftype == 'CIRCLE':
-                return None  # 暂不处理
+                center = entity.dxf.center
+                radius = entity.dxf.radius
+                coords = []
+                for i in range(36):
+                    angle = 2 * 3.141592653589793 * i / 36
+                    x = center.x + radius * math.cos(angle)
+                    y = center.y + radius * math.sin(angle)
+                    coords.append((x, y))
+                coords.append(coords[0])
+                return coords
             
             elif dxftype == 'LINE':
                 s = entity.dxf.start

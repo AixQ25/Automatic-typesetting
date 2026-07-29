@@ -112,6 +112,8 @@ class DxfParser:
                 return self._parse_ellipse(entity)
             elif dxftype == 'INSERT':
                 return self._parse_insert(entity)
+            elif dxftype == 'POINT':
+                return self._parse_point(entity)
             else:
                 return None
                 
@@ -296,10 +298,51 @@ class DxfParser:
             area=0.0
         )
     
+    def _parse_point(self, entity) -> Optional[DxfEntity]:
+        """解析POINT实体，将点转换为小圆形"""
+        location = entity.dxf.location
+        radius = 2.0  # 默认半径2mm，用于可视化和排样
+        
+        coords = []
+        for i in range(36):
+            angle = 2 * math.pi * i / 36
+            x = location.x + radius * math.cos(angle)
+            y = location.y + radius * math.sin(angle)
+            coords.append((x, y))
+        coords.append(coords[0])
+        
+        bbox = calculate_bounding_box(coords)
+        area = math.pi * radius * radius
+        
+        return DxfEntity(
+            handle=entity.dxf.handle,
+            entity_type='POINT',
+            layer=entity.dxf.layer,
+            coordinates=coords,
+            closed=True,
+            bbox=bbox,
+            area=area
+        )
+    
+    def _apply_transform(self, coords, insert_point, x_scale, y_scale, rotation):
+        """对坐标应用INSERT变换：缩放 → 旋转 → 平移"""
+        if not coords:
+            return coords
+        rot_rad = math.radians(rotation)
+        cos_r = math.cos(rot_rad)
+        sin_r = math.sin(rot_rad)
+        new_coords = []
+        for x, y in coords:
+            sx = x * x_scale
+            sy = y * y_scale
+            rx = sx * cos_r - sy * sin_r
+            ry = sx * sin_r + sy * cos_r
+            new_coords.append((rx + insert_point.x, ry + insert_point.y))
+        return new_coords
+    
     def _parse_insert(self, entity) -> List[DxfEntity]:
-        """解析INSERT实体（块引用），返回所有几何实体"""
+        """解析INSERT实体（块引用），返回所有几何实体（应用变换）"""
         try:
-            # 获取块定义
             block_name = entity.dxf.name
             block = self.doc.blocks.get(block_name)
             
@@ -307,13 +350,35 @@ class DxfParser:
                 print(f"块定义不存在: {block_name}")
                 return []
             
-            # 收集块中的所有几何实体
+            # 获取INSERT变换参数
+            insert_point = entity.dxf.insert
+            x_scale = getattr(entity.dxf, 'xscale', 1.0)
+            y_scale = getattr(entity.dxf, 'yscale', 1.0)
+            rotation = getattr(entity.dxf, 'rotation', 0.0)
+            
             result = []
             for block_entity in block:
-                if block_entity.dxftype() in ['POLYLINE', 'LWPOLYLINE', 'CIRCLE', 'ARC', 'LINE', 'SPLINE', 'ELLIPSE']:
+                dxftype = block_entity.dxftype()
+                
+                if dxftype == 'INSERT':
+                    # 递归解析嵌套INSERT
+                    nested_result = self._parse_insert(block_entity)
+                    for nested in nested_result:
+                        # 对嵌套结果应用当前INSERT的变换
+                        nested.coordinates = self._apply_transform(
+                            nested.coordinates, insert_point, x_scale, y_scale, rotation)
+                        nested.bbox = calculate_bounding_box(nested.coordinates)
+                        nested.handle = f"{entity.dxf.handle}_{nested.handle}"
+                        result.append(nested)
+                        
+                elif dxftype in ['POLYLINE', 'LWPOLYLINE', 'CIRCLE', 'ARC',
+                                'LINE', 'SPLINE', 'ELLIPSE', 'POINT']:
                     parsed = self._parse_entity(block_entity)
                     if parsed:
-                        # 更新句柄为 INSERT 的句柄 + 块内实体句柄
+                        # 应用INSERT变换
+                        parsed.coordinates = self._apply_transform(
+                            parsed.coordinates, insert_point, x_scale, y_scale, rotation)
+                        parsed.bbox = calculate_bounding_box(parsed.coordinates)
                         parsed.handle = f"{entity.dxf.handle}_{block_entity.dxf.handle}"
                         parsed.entity_type = block_entity.dxftype()
                         result.append(parsed)
@@ -322,6 +387,8 @@ class DxfParser:
             
         except Exception as e:
             print(f"解析INSERT失败: {e}")
+            import traceback
+            traceback.print_exc()
             return []
     
     def get_shapes_with_mbr(self) -> List[dict]:

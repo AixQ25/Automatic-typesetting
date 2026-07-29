@@ -32,7 +32,7 @@ class ShapeUnit:
 class ContainmentDetector:
     """包含关系检测器"""
     
-    def __init__(self, min_area: float = 10.0):
+    def __init__(self, min_area: float = 0.1):
         """
         初始化检测器
         
@@ -51,9 +51,9 @@ class ContainmentDetector:
         Returns:
             List[ShapeUnit]: 形状单元列表
         """
-        # 过滤有效实体（不要求闭合，保留外围框）
+        # 过滤有效实体（不要求闭合，保留外围框和小图形）
         valid_entities = [e for e in entities 
-                         if e.bbox and e.area >= self.min_area]
+                         if e.bbox and (e.area >= self.min_area or len(e.coordinates) >= 2)]
         
         if not valid_entities:
             return []
