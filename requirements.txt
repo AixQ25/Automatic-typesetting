@@ -1,5 +1,6 @@
 pyautocad>=0.2.0
 shapely>=2.0.0
+ezdxf>=1.4.0
 PyQt5>=5.15.0
 matplotlib>=3.5.0
 numpy>=1.21.0

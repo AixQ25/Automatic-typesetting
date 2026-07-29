@@ -14,6 +14,8 @@ class Rect:
     width: float
     height: float
     id: int = 0  # 图形ID
+    handle: str = ''  # DXF实体句柄
+    layer: str = ''   # 图层名
     
     @property
     def area(self) -> float:
