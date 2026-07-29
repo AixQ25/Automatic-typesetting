@@ -144,10 +144,10 @@ class AutoNestingApp(QMainWindow):
         spacing_layout = QHBoxLayout(spacing_group)
         spacing_layout.addWidget(QLabel("图形间距:"))
         self.spacing_spin = QDoubleSpinBox()
-        self.spacing_spin.setRange(3.0, 10.0)
+        self.spacing_spin.setRange(3.0, 50.0)
         self.spacing_spin.setValue(config.NESTING_SPACING)
         self.spacing_spin.setSuffix(" mm")
-        self.spacing_spin.setSingleStep(0.5)
+        self.spacing_spin.setSingleStep(1.0)
         spacing_layout.addWidget(self.spacing_spin)
         control_layout.addWidget(spacing_group)
         
@@ -435,7 +435,7 @@ class AutoNestingApp(QMainWindow):
         # 写入DXF
         success = writer.write_multi_group_results(
             self.results, output_path,
-            gap=20,  # 组间距20mm
+            gap=50,  # 组间距50mm
             unit_map=unit_map
         ) if writer else False
         

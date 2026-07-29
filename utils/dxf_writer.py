@@ -143,37 +143,25 @@ class DxfWriter:
         w = placement.actual_width
         h = placement.actual_height
         
-        # 计算偏移量（从原始位置到新位置）
         handle = placement.rect.handle
         unit = unit_map.get(handle) if unit_map else None
         
         if unit:
-            # 有单元信息，绘制完整结构
             outer = unit.outer
             outer_bbox = outer.bbox
             
-            # 计算外层边界原始左下角
             orig_x = outer_bbox.x_min
             orig_y = outer_bbox.y_min
             
-            # 计算偏移量
             dx = px - orig_x
             dy = py - orig_y
             
-            # 绘制外层边界（外围框）
-            outer_coords = [(x + dx, y + dy) for x, y in outer.coordinates]
-            # 确保闭合
-            if outer_coords[0] != outer_coords[-1]:
-                outer_coords.append(outer_coords[0])
-            msp.add_lwpolyline(outer_coords, dxfattribs={'layer': layer_name})
+            # 绘制外层边界
+            self._draw_entity(msp, outer, dx, dy, layer_name)
             
             # 绘制内部图形
             for inner in unit.inner:
-                inner_coords = [(x + dx, y + dy) for x, y in inner.coordinates]
-                # 确保闭合
-                if inner_coords[0] != inner_coords[-1]:
-                    inner_coords.append(inner_coords[0])
-                msp.add_lwpolyline(inner_coords, dxfattribs={'layer': layer_name})
+                self._draw_entity(msp, inner, dx, dy, layer_name)
         else:
             # 无单元信息，绘制矩形占位
             msp.add_lwpolyline([
@@ -183,6 +171,29 @@ class DxfWriter:
                 (px, py + h),
                 (px, py),
             ], dxfattribs={'layer': layer_name})
+    
+    def _draw_entity(self, msp, entity, dx, dy, layer_name):
+        """根据实体类型绘制图形（应用偏移）"""
+        etype = entity.entity_type
+        coords = [(x + dx, y + dy) for x, y in entity.coordinates]
+        
+        if etype == 'CIRCLE':
+            # CIRCLE 实体：用 add_circle 绘制更准确
+            if len(coords) >= 36:
+                # 计算圆心和半径
+                cx = sum(p[0] for p in coords[:36]) / 36
+                cy = sum(p[1] for p in coords[:36]) / 36
+                r = ((coords[0][0] - cx) ** 2 + (coords[0][1] - cy) ** 2) ** 0.5
+                if r > 0.01:
+                    msp.add_circle((cx, cy), r, dxfattribs={'layer': layer_name})
+                    return
+        
+        # POLYLINE / LWPOLYLINE / LINE / POINT / 等：用 lwpolyline 绘制
+        if len(coords) >= 2:
+            # 只在闭合时添加闭合点，不强制闭合开放线段
+            if entity.closed and coords[0] != coords[-1]:
+                coords.append(coords[0])
+            msp.add_lwpolyline(coords, dxfattribs={'layer': layer_name})
     
     def create_nested_dxf(self, placements: List[Placement],
                           output_path: str,

@@ -124,7 +124,7 @@ class RectNesting:
     
     def _find_best_position(self, rect: Rect, rotated: bool) -> Placement:
         """
-        查找最佳放置位置 - 底部优先策略
+        查找最佳放置位置 - 改进的底部优先策略（含下滑优化）
         
         Args:
             rect: 矩形
@@ -136,33 +136,46 @@ class RectNesting:
         actual_width = rect.height if rotated else rect.width
         actual_height = rect.width if rotated else rect.height
         
-        # 添加间距
         total_width = actual_width + self.spacing
         total_height = actual_height + self.spacing
         
-        # 检查是否能放入板材
         if total_width > self.max_x - self.min_x:
             return None
         if total_height > self.max_y - self.min_y:
             return None
         
-        # 生成候选位置
         candidates = self._generate_candidates(total_width, total_height)
-        
-        # 按Y坐标排序，然后按X坐标排序（底部优先）
         candidates.sort(key=lambda p: (p[1], p[0]))
         
-        # 尝试每个候选位置
         for x, y in candidates:
             if self._can_place(x, y, total_width, total_height):
+                # 下滑优化：尽可能向左滑动，再向下滑动
+                final_x, final_y = self._slide_to_bottom_left(x, y, total_width, total_height)
                 return Placement(
                     rect=rect,
-                    x=x,
-                    y=y,
+                    x=final_x,
+                    y=final_y,
                     rotated=rotated
                 )
         
         return None
+    
+    def _slide_to_bottom_left(self, x: float, y: float, width: float, height: float) -> Tuple[float, float]:
+        """下滑优化：将矩形尽可能向左、然后向下滑动"""
+        # 向左滑动
+        step = 1.0
+        while x - step >= self.min_x:
+            if not self._can_place(x - step, y, width, height):
+                break
+            x -= step
+        
+        # 向下滑动
+        while y - step >= self.min_y:
+            if not self._can_place(x, y - step, width, height):
+                break
+            y -= step
+        
+        return x, y
     
     def _generate_candidates(self, width: float, height: float) -> List[Tuple[float, float]]:
         """
@@ -200,8 +213,14 @@ class RectNesting:
             # 右上角
             if right_x + width <= self.max_x and top_y + height <= self.max_y:
                 candidates.append((right_x, top_y))
+            
+            # 左边（贴合左边已放置图形）
+            left_x = px - width
+            if left_x >= self.min_x:
+                candidates.append((left_x, py))
+                candidates.append((left_x, top_y))
         
-        # 去重
+        # 去重并排序
         candidates = list(set(candidates))
         
         return candidates

@@ -51,7 +51,7 @@ class TextParser:
     
     def parse(self) -> Dict[float, List[ThicknessLabel]]:
         """
-        解析所有文字标注
+        解析所有文字标注（包括 INSERT 块内的 TEXT）
         
         Returns:
             Dict[float, List[ThicknessLabel]]: 按厚度值分组的标注
@@ -60,14 +60,8 @@ class TextParser:
         self.skip_labels = []
         
         msp = self.doc.modelspace()
-        
-        for entity in msp:
-            dxftype = entity.dxftype()
-            
-            if dxftype == 'TEXT':
-                self._parse_text(entity)
-            elif dxftype == 'MTEXT':
-                self._parse_mtext(entity)
+        self._parse_entities(msp)
+        self._parse_entities_in_blocks()
         
         # 按厚度值分组
         thickness_groups = {}
@@ -78,14 +72,52 @@ class TextParser:
         
         return thickness_groups
     
-    def _parse_text(self, entity):
+    def _parse_entities(self, entities):
+        """解析实体集合中的 TEXT/MTEXT"""
+        for entity in entities:
+            dxftype = entity.dxftype()
+            
+            if dxftype == 'TEXT':
+                self._parse_text(entity)
+            elif dxftype == 'MTEXT':
+                self._parse_mtext(entity)
+            elif dxftype == 'INSERT':
+                self._parse_insert_text(entity)
+    
+    def _parse_entities_in_blocks(self):
+        """解析自定义块中的 TEXT 实体"""
+        for block in self.doc.blocks:
+            if block.name.startswith('*'):
+                continue
+            for entity in block:
+                if entity.dxftype() == 'TEXT':
+                    self._parse_text(entity)
+                elif entity.dxftype() == 'MTEXT':
+                    self._parse_mtext(entity)
+    
+    def _parse_insert_text(self, entity):
+        """解析 INSERT 实体中块的 TEXT"""
+        try:
+            block_name = entity.dxf.name
+            block = self.doc.blocks.get(block_name)
+            if block:
+                insert_x = entity.dxf.insert.x
+                insert_y = entity.dxf.insert.y
+                for block_entity in block:
+                    if block_entity.dxftype() == 'TEXT':
+                        self._parse_text(block_entity, offset_x=insert_x, offset_y=insert_y)
+                    elif block_entity.dxftype() == 'MTEXT':
+                        self._parse_mtext(block_entity, offset_x=insert_x, offset_y=insert_y)
+        except Exception:
+            pass
+    
+    def _parse_text(self, entity, offset_x=0.0, offset_y=0.0):
         """解析TEXT实体"""
         try:
             text = entity.dxf.text.strip()
-            x = entity.dxf.insert.x
-            y = entity.dxf.insert.y
+            x = entity.dxf.insert.x + offset_x
+            y = entity.dxf.insert.y + offset_y
             
-            # 检查是否是厚度标注
             thickness = self._extract_thickness(text)
             if thickness is not None:
                 self.thickness_labels.append(ThicknessLabel(
@@ -96,7 +128,6 @@ class TextParser:
                 ))
                 return
             
-            # 检查是否是跳过标注
             if self._is_skip_text(text):
                 self.skip_labels.append(SkipLabel(
                     x=x,
@@ -107,14 +138,13 @@ class TextParser:
         except Exception as e:
             pass
     
-    def _parse_mtext(self, entity):
+    def _parse_mtext(self, entity, offset_x=0.0, offset_y=0.0):
         """解析MTEXT实体"""
         try:
             text = entity.text.strip()
-            x = entity.dxf.insert.x
-            y = entity.dxf.insert.y
+            x = entity.dxf.insert.x + offset_x
+            y = entity.dxf.insert.y + offset_y
             
-            # 检查是否是厚度标注（MTEXT可能包含多行）
             thickness = self._extract_thickness(text)
             if thickness is not None:
                 self.thickness_labels.append(ThicknessLabel(
@@ -125,7 +155,6 @@ class TextParser:
                 ))
                 return
             
-            # 检查是否是跳过标注
             if self._is_skip_text(text):
                 self.skip_labels.append(SkipLabel(
                     x=x,
