@@ -259,11 +259,29 @@ class AutoNestingApp(QMainWindow):
         units = detector.detect(shapes)
         
         self.log(f"  检测到 {len(units)} 个图形单元")
-        for i, unit in enumerate(units[:5]):  # 只显示前5个
-            self.log(f"    单元 {i+1}: 外层 {unit.outer.handle} "
-                    f"({unit.total_area:.0f}mm²), 内部 {len(unit.inner)} 个")
-        if len(units) > 5:
-            self.log(f"    ... 还有 {len(units)-5} 个单元")
+        
+        # 过滤超大单元（宽度或高度超过最大板材）
+        max_board_width = 600 - 20  # 板材宽度 - 边距
+        max_board_height = 850 - 20  # 板材高度 - 边距
+        
+        valid_units = []
+        skipped_units = []
+        for unit in units:
+            w = unit.outer.bbox.width
+            h = unit.outer.bbox.height
+            if w > max_board_width or h > max_board_height:
+                skipped_units.append(unit)
+            else:
+                valid_units.append(unit)
+        
+        if skipped_units:
+            self.log(f"  跳过 {len(skipped_units)} 个超大单元:")
+            for unit in skipped_units[:5]:
+                self.log(f"    - {unit.handle}: {unit.outer.bbox.width:.0f}x{unit.outer.bbox.height:.0f}mm")
+            if len(skipped_units) > 5:
+                self.log(f"    ... 还有 {len(skipped_units)-5} 个")
+        
+        self.log(f"  有效单元: {len(valid_units)} 个")
         
         # 解析文字标注
         text_parser = TextParser(self.parser.doc)
@@ -273,7 +291,7 @@ class AutoNestingApp(QMainWindow):
         grouper = ShapeGrouper()
         shape_groups = grouper.group_shapes(
             [{'handle': unit.handle, 'bbox': unit.outer.bbox, 'unit': unit} 
-             for unit in units],
+             for unit in valid_units],
             list(thickness_groups_labels.values())[0] if thickness_groups_labels else [],
             text_parser.skip_labels
         )
@@ -286,7 +304,7 @@ class AutoNestingApp(QMainWindow):
         if not shape_groups:
             self.log("未找到厚度标注，将所有图形作为一组处理")
             all_rects = []
-            for i, unit in enumerate(units):
+            for i, unit in enumerate(valid_units):
                 all_rects.append(Rect(
                     width=unit.outer.bbox.width,
                     height=unit.outer.bbox.height,
@@ -295,7 +313,7 @@ class AutoNestingApp(QMainWindow):
                 ))
             
             # 记录单元映射
-            self.unit_map = {unit.handle: unit for unit in units}
+            self.unit_map = {unit.handle: unit for unit in valid_units}
             
             # 获取用户设置的间距
             spacing = self.spacing_spin.value()
@@ -304,7 +322,7 @@ class AutoNestingApp(QMainWindow):
             shape_groups = {0.0: ShapeGroup(
                 thickness=0.0,
                 shapes=[{'handle': unit.handle, 'bbox': unit.outer.bbox, 'unit': unit} 
-                        for unit in units],
+                        for unit in valid_units],
                 label_x=0,
                 label_y=0
             )}
@@ -312,7 +330,7 @@ class AutoNestingApp(QMainWindow):
         else:
             # 为每组计算最优板材
             self.results = {}
-            self.unit_map = {unit.handle: unit for unit in units}
+            self.unit_map = {unit.handle: unit for unit in valid_units}
             
             # 获取用户设置的间距
             spacing = self.spacing_spin.value()
@@ -353,7 +371,7 @@ class AutoNestingApp(QMainWindow):
         self.log(f"\n{'='*40}")
         self.log(f"排版完成！")
         self.log(f"总板材数: {total_boards}")
-        self.log(f"已放置单元: {total_shapes}/{len(units)}")
+        self.log(f"已放置单元: {total_shapes}/{len(valid_units)}")
         self.log(f"{'='*40}")
         
         self.statusBar().showMessage(
@@ -364,7 +382,7 @@ class AutoNestingApp(QMainWindow):
                                f"排版完成！\n\n"
                                f"厚度组数: {len(self.results)}\n"
                                f"总板材数: {total_boards}\n"
-                               f"已放置: {total_shapes}/{len(units)} 个单元")
+                               f"已放置: {total_shapes}/{len(valid_units)} 个单元")
     
     def export_dxf(self):
         """导出排版结果为DXF文件"""
