@@ -169,8 +169,9 @@ class DxfWriter:
             dx = px - orig_x
             dy = py - orig_y
             
-            # 绘制外层边界
+            # 绘制外层边界（外围框）
             outer_coords = [(x + dx, y + dy) for x, y in outer.coordinates]
+            # 确保闭合
             if outer_coords[0] != outer_coords[-1]:
                 outer_coords.append(outer_coords[0])
             msp.add_lwpolyline(outer_coords, dxfattribs={'layer': layer_name})
@@ -178,6 +179,7 @@ class DxfWriter:
             # 绘制内部图形
             for inner in unit.inner:
                 inner_coords = [(x + dx, y + dy) for x, y in inner.coordinates]
+                # 确保闭合
                 if inner_coords[0] != inner_coords[-1]:
                     inner_coords.append(inner_coords[0])
                 msp.add_lwpolyline(inner_coords, dxfattribs={'layer': layer_name})

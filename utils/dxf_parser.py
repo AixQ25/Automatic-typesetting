@@ -105,6 +105,8 @@ class DxfParser:
                 return self._parse_spline(entity)
             elif dxftype == 'ELLIPSE':
                 return self._parse_ellipse(entity)
+            elif dxftype == 'INSERT':
+                return self._parse_insert(entity)
             else:
                 return None
                 
@@ -288,6 +290,69 @@ class DxfParser:
             bbox=bbox,
             area=0.0
         )
+    
+    def _parse_insert(self, entity) -> Optional[DxfEntity]:
+        """解析INSERT实体（块引用）"""
+        try:
+            # 获取块定义
+            block_name = entity.dxf.name
+            block = self.doc.blocks.get(block_name)
+            
+            if not block:
+                print(f"块定义不存在: {block_name}")
+                return None
+            
+            # 收集块中的所有几何实体
+            all_coords = []
+            for block_entity in block:
+                if block_entity.dxftype() in ['POLYLINE', 'LWPOLYLINE', 'CIRCLE', 'ARC', 'LINE', 'SPLINE', 'ELLIPSE']:
+                    parsed = self._parse_entity(block_entity)
+                    if parsed:
+                        all_coords.extend(parsed.coordinates)
+            
+            if not all_coords:
+                return None
+            
+            # 计算边界框
+            bbox = calculate_bounding_box(all_coords)
+            
+            # 计算面积（使用边界框面积）
+            area = bbox.width * bbox.height if bbox else 0.0
+            
+            # 返回第一个几何实体作为代表（保持原始形状）
+            for block_entity in block:
+                if block_entity.dxftype() in ['POLYLINE', 'LWPOLYLINE']:
+                    parsed = self._parse_entity(block_entity)
+                    if parsed:
+                        # 更新句柄为 INSERT 的句柄
+                        parsed.handle = entity.dxf.handle
+                        parsed.entity_type = 'INSERT'
+                        return parsed
+            
+            # 如果没有找到 POLYLINE/LWPOLYLINE，返回边界框矩形
+            if bbox:
+                coords = [
+                    (bbox.x_min, bbox.y_min),
+                    (bbox.x_max, bbox.y_min),
+                    (bbox.x_max, bbox.y_max),
+                    (bbox.x_min, bbox.y_max),
+                    (bbox.x_min, bbox.y_min)
+                ]
+                return DxfEntity(
+                    handle=entity.dxf.handle,
+                    entity_type='INSERT',
+                    layer=entity.dxf.layer,
+                    coordinates=coords,
+                    closed=True,
+                    bbox=bbox,
+                    area=area
+                )
+            
+            return None
+            
+        except Exception as e:
+            print(f"解析INSERT失败: {e}")
+            return None
     
     def get_shapes_with_mbr(self) -> List[dict]:
         """

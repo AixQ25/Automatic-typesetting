@@ -51,24 +51,32 @@ class ContainmentDetector:
         Returns:
             List[ShapeUnit]: 形状单元列表
         """
-        # 过滤有效实体
+        # 过滤有效实体（不要求闭合，保留外围框）
         valid_entities = [e for e in entities 
-                         if e.bbox and e.area >= self.min_area and e.closed]
+                         if e.bbox and e.area >= self.min_area]
         
         if not valid_entities:
             return []
         
-        # 创建 shapely Polygon
+        # 创建 shapely Polygon（使用边界框进行包含检测）
         polygon_data = []
         for entity in valid_entities:
             try:
-                poly = Polygon(entity.coordinates)
+                # 使用边界框进行包含检测（更可靠）
+                bbox = entity.bbox
+                poly = Polygon([
+                    (bbox.x_min, bbox.y_min),
+                    (bbox.x_max, bbox.y_min),
+                    (bbox.x_max, bbox.y_max),
+                    (bbox.x_min, bbox.y_max),
+                    (bbox.x_min, bbox.y_min)
+                ])
                 if not poly.is_valid:
                     poly = make_valid(poly)
                 polygon_data.append({
                     'entity': entity,
                     'polygon': poly,
-                    'area': poly.area,
+                    'area': entity.area,
                     'centroid': poly.centroid
                 })
             except Exception as e:
@@ -84,6 +92,7 @@ class ContainmentDetector:
         for i, data_i in enumerate(polygon_data):
             handle_i = data_i['entity'].handle
             poly_i = data_i['polygon']
+            bbox_i = data_i['entity'].bbox
             
             # 查找包含当前图形的父图形
             parent = None
@@ -94,16 +103,19 @@ class ContainmentDetector:
                     continue
                 
                 handle_j = data_j['entity'].handle
-                poly_j = data_j['polygon']
+                bbox_j = data_j['entity'].bbox
                 area_j = data_j['area']
                 
                 # 父图形必须面积更大
                 if area_j <= data_i['area']:
                     continue
                 
-                # 检测质心是否在父图形内部
-                centroid_i = data_i['centroid']
-                if poly_j.contains(centroid_i):
+                # 使用边界框检测包含关系（更可靠）
+                # 检查 bbox_i 是否完全在 bbox_j 内部
+                if (bbox_j.x_min <= bbox_i.x_min and 
+                    bbox_j.y_min <= bbox_i.y_min and
+                    bbox_j.x_max >= bbox_i.x_max and 
+                    bbox_j.y_max >= bbox_i.y_max):
                     # 选择面积最小的包含者（最近的父级）
                     if area_j < min_parent_area:
                         min_parent_area = area_j
