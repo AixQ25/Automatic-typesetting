@@ -25,13 +25,13 @@ class ShapeGroup:
 class ShapeGrouper:
     """形状分组器"""
     
-    def __init__(self, y_tolerance: float = 30.0, x_search_range: float = 200.0):
+    def __init__(self, y_tolerance: float = 500.0, x_search_range: float = 2000.0):
         """
         初始化分组器
         
         Args:
             y_tolerance: Y坐标容差（同一行的判断标准）
-            x_search_range: X搜索范围（向左搜索标注的距离）
+            x_search_range: X搜索范围（搜索标注的距离）
         """
         self.y_tolerance = y_tolerance
         self.x_search_range = x_search_range
@@ -98,20 +98,16 @@ class ShapeGrouper:
         找到最近的厚度标注
         
         规则:
-        1. 标注必须在图形左边 (label_x < shape_x)
+        1. X距离不能太远 (|label_x - shape_x| < x_search_range)
         2. Y坐标相近 (|label_y - shape_y| < y_tolerance)
-        3. 选择X距离最近的
+        3. 选择距离最近的
         """
         best_label = None
         best_distance = float('inf')
         
         for label in labels:
-            # 标注必须在图形左边
-            if label.x >= shape_x:
-                continue
-            
             # X距离不能太远
-            x_distance = shape_x - label.x
+            x_distance = abs(label.x - shape_x)
             if x_distance > self.x_search_range:
                 continue
             
@@ -120,8 +116,8 @@ class ShapeGrouper:
             if y_distance > self.y_tolerance:
                 continue
             
-            # 计算综合距离（X权重更大）
-            distance = x_distance + y_distance * 2
+            # 计算综合距离
+            distance = (x_distance ** 2 + y_distance ** 2) ** 0.5
             
             if distance < best_distance:
                 best_distance = distance

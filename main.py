@@ -288,13 +288,38 @@ class AutoNestingApp(QMainWindow):
         thickness_groups_labels = text_parser.parse()
         
         # 按厚度分组（使用单元的外层边界）
-        grouper = ShapeGrouper()
+        grouper = ShapeGrouper(y_tolerance=1000, x_search_range=5000)
         shape_groups = grouper.group_shapes(
             [{'handle': unit.handle, 'bbox': unit.outer.bbox, 'unit': unit} 
              for unit in valid_units],
-            list(thickness_groups_labels.values())[0] if thickness_groups_labels else [],
+            [label for labels in thickness_groups_labels.values() for label in labels],
             text_parser.skip_labels
         )
+        
+        # 找出未分组的单元
+        grouped_handles = set()
+        for group in shape_groups.values():
+            for shape in group.shapes:
+                grouped_handles.add(shape['handle'])
+        
+        ungrouped_units = [u for u in valid_units if u.handle not in grouped_handles]
+        
+        if ungrouped_units:
+            self.log(f"  未分组单元: {len(ungrouped_units)} 个，归入默认组")
+            # 将未分组的单元添加到默认组
+            if 0.0 not in shape_groups:
+                shape_groups[0.0] = ShapeGroup(
+                    thickness=0.0,
+                    shapes=[],
+                    label_x=0,
+                    label_y=0
+                )
+            for unit in ungrouped_units:
+                shape_groups[0.0].shapes.append({
+                    'handle': unit.handle,
+                    'bbox': unit.outer.bbox,
+                    'unit': unit
+                })
         
         self.log(f"\n{'='*40}")
         self.log("开始排版")
