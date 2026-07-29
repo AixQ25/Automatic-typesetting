@@ -30,7 +30,7 @@ class DxfWriter:
         self.target_doc = None
     
     def write_multi_group_results(self, results: Dict, output_path: str,
-                                  gap: float = 20.0) -> bool:
+                                  gap: float = 20.0, unit_map: Dict = None) -> bool:
         """
         写入多组排版结果到DXF文件
         
@@ -38,6 +38,7 @@ class DxfWriter:
             results: Dict[float, NestingResult] 按厚度分组的排版结果
             output_path: 输出文件路径
             gap: 组间距 (mm)
+            unit_map: Dict[str, ShapeUnit] 单元映射（可选，用于保留内部结构）
             
         Returns:
             bool: 是否成功
@@ -114,19 +115,8 @@ class DxfWriter:
                     
                     # 绘制放置的图形
                     for p in board.placements:
-                        px = x0 + p.x
-                        py = y0 + p.y
-                        w = p.actual_width
-                        h = p.actual_height
-                        
-                        # 绘制图形轮廓
-                        msp.add_lwpolyline([
-                            (px, py),
-                            (px + w, py),
-                            (px + w, py + h),
-                            (px, py + h),
-                            (px, py),
-                        ], dxfattribs={'layer': layer_name})
+                        self._draw_placement_with_unit(msp, p, x0, y0, 
+                                                     layer_name, unit_map)
                     
                     # 更新Y偏移
                     y_offset += board.height + gap
@@ -144,6 +134,62 @@ class DxfWriter:
             import traceback
             traceback.print_exc()
             return False
+    
+    def _draw_placement_with_unit(self, msp, placement, x0, y0, 
+                                 layer_name, unit_map=None):
+        """
+        绘制放置的图形（包括内部结构）
+        
+        Args:
+            msp: 模型空间
+            placement: 放置信息
+            x0, y0: 板材偏移
+            layer_name: 图层名
+            unit_map: 单元映射
+        """
+        px = x0 + placement.x
+        py = y0 + placement.y
+        w = placement.actual_width
+        h = placement.actual_height
+        
+        # 计算偏移量（从原始位置到新位置）
+        handle = placement.rect.handle
+        unit = unit_map.get(handle) if unit_map else None
+        
+        if unit:
+            # 有单元信息，绘制完整结构
+            outer = unit.outer
+            outer_bbox = outer.bbox
+            
+            # 计算外层边界原始左下角
+            orig_x = outer_bbox.x_min
+            orig_y = outer_bbox.y_min
+            
+            # 计算偏移量
+            dx = px - orig_x
+            dy = py - orig_y
+            
+            # 绘制外层边界
+            outer_coords = [(x + dx, y + dy) for x, y in outer.coordinates]
+            if outer_coords[0] != outer_coords[-1]:
+                outer_coords.append(outer_coords[0])
+            msp.add_lwpolyline(outer_coords, dxfattribs={'layer': layer_name})
+            
+            # 绘制内部图形
+            for inner in unit.inner:
+                inner_coords = [(x + dx, y + dy) for x, y in inner.coordinates]
+                if inner_coords[0] != inner_coords[-1]:
+                    inner_coords.append(inner_coords[0])
+                msp.add_lwpolyline(inner_coords, dxfattribs={'layer': layer_name})
+        else:
+            # 无单元信息，绘制矩形占位
+            msp.add_lwpolyline([
+                (px, py),
+                (px + w, py),
+                (px + w, py + h),
+                (px, py + h),
+                (px, py),
+            ], dxfattribs={'layer': layer_name})
     
     def create_nested_dxf(self, placements: List[Placement],
                           output_path: str,

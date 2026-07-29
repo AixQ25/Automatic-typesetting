@@ -23,6 +23,7 @@ from utils.dxf_parser import DxfParser
 from utils.dxf_writer import DxfWriter
 from utils.text_parser import TextParser
 from utils.shape_grouper import ShapeGrouper, ShapeGroup
+from utils.containment_detector import ContainmentDetector
 from nesting.rect_nesting import Rect, RectNesting, Placement
 from nesting.board_optimizer import find_optimal_boards, NestingResult, Board
 
@@ -239,14 +240,27 @@ class AutoNestingApp(QMainWindow):
             QMessageBox.warning(self, "警告", "没有有效图形")
             return
         
+        # 检测包含关系
+        self.log("\n检测图形包含关系...")
+        detector = ContainmentDetector()
+        units = detector.detect(shapes)
+        
+        self.log(f"  检测到 {len(units)} 个图形单元")
+        for i, unit in enumerate(units[:5]):  # 只显示前5个
+            self.log(f"    单元 {i+1}: 外层 {unit.outer.handle} "
+                    f"({unit.total_area:.0f}mm²), 内部 {len(unit.inner)} 个")
+        if len(units) > 5:
+            self.log(f"    ... 还有 {len(units)-5} 个单元")
+        
         # 解析文字标注
         text_parser = TextParser(self.parser.doc)
         thickness_groups_labels = text_parser.parse()
         
-        # 按厚度分组
+        # 按厚度分组（使用单元的外层边界）
         grouper = ShapeGrouper()
         shape_groups = grouper.group_shapes(
-            [{'handle': s.handle, 'bbox': s.bbox, 'entity': s} for s in shapes],
+            [{'handle': unit.handle, 'bbox': unit.outer.bbox, 'unit': unit} 
+             for unit in units],
             list(thickness_groups_labels.values())[0] if thickness_groups_labels else [],
             text_parser.skip_labels
         )
@@ -255,26 +269,26 @@ class AutoNestingApp(QMainWindow):
         self.log("开始排版")
         self.log(f"{'='*40}")
         
-        # 如果没有厚度标注，将所有图形作为一组
+        # 如果没有厚度标注，将所有单元作为一组
         if not shape_groups:
             self.log("未找到厚度标注，将所有图形作为一组处理")
             all_rects = []
-            for i, shape in enumerate(shapes):
+            for i, unit in enumerate(units):
                 all_rects.append(Rect(
-                    width=shape.bbox.width,
-                    height=shape.bbox.height,
+                    width=unit.outer.bbox.width,
+                    height=unit.outer.bbox.height,
                     id=i,
-                    handle=shape.handle,
+                    handle=unit.handle,
                 ))
             
-            # 使用默认板材
-            board_key = list(config.BOARD_SIZES.keys())[0]
-            board_width, board_height, _ = config.BOARD_SIZES[board_key]
+            # 记录单元映射
+            self.unit_map = {unit.handle: unit for unit in units}
             
             result = find_optimal_boards(all_rects, spacing=config.NESTING_SPACING)
             shape_groups = {0.0: ShapeGroup(
                 thickness=0.0,
-                shapes=[{'handle': s.handle, 'bbox': s.bbox} for s in shapes],
+                shapes=[{'handle': unit.handle, 'bbox': unit.outer.bbox, 'unit': unit} 
+                        for unit in units],
                 label_x=0,
                 label_y=0
             )}
@@ -282,9 +296,10 @@ class AutoNestingApp(QMainWindow):
         else:
             # 为每组计算最优板材
             self.results = {}
+            self.unit_map = {unit.handle: unit for unit in units}
             
             for thickness, group in sorted(shape_groups.items()):
-                self.log(f"\n处理 {thickness}mm 组 ({len(group.shapes)} 个图形)")
+                self.log(f"\n处理 {thickness}mm 组 ({len(group.shapes)} 个单元)")
                 
                 # 创建矩形列表
                 rects = []
@@ -303,7 +318,7 @@ class AutoNestingApp(QMainWindow):
                 
                 self.log(f"  板材方案: {len(result.boards)} 张")
                 for board in result.boards:
-                    self.log(f"    - {board.name}: {len(board.placements)} 个图形, "
+                    self.log(f"    - {board.name}: {len(board.placements)} 个单元, "
                            f"利用率 {board.utilization:.1%}")
         
         self.progress_bar.setVisible(False)
@@ -319,18 +334,18 @@ class AutoNestingApp(QMainWindow):
         self.log(f"\n{'='*40}")
         self.log(f"排版完成！")
         self.log(f"总板材数: {total_boards}")
-        self.log(f"已放置图形: {total_shapes}/{len(shapes)}")
+        self.log(f"已放置单元: {total_shapes}/{len(units)}")
         self.log(f"{'='*40}")
         
         self.statusBar().showMessage(
-            f"排版完成: {total_boards} 张板材, {total_shapes} 个图形"
+            f"排版完成: {total_boards} 张板材, {total_shapes} 个单元"
         )
         
         QMessageBox.information(self, "排版完成",
                                f"排版完成！\n\n"
                                f"厚度组数: {len(self.results)}\n"
                                f"总板材数: {total_boards}\n"
-                               f"已放置: {total_shapes}/{len(shapes)} 个图形")
+                               f"已放置: {total_shapes}/{len(units)} 个单元")
     
     def export_dxf(self):
         """导出排版结果为DXF文件"""
@@ -352,10 +367,14 @@ class AutoNestingApp(QMainWindow):
         # 创建写入器
         writer = DxfWriter(self.source_dxf_path) if self.source_dxf_path else None
         
+        # 获取单元映射
+        unit_map = getattr(self, 'unit_map', None)
+        
         # 写入DXF
         success = writer.write_multi_group_results(
             self.results, output_path,
-            gap=20  # 组间距20mm
+            gap=20,  # 组间距20mm
+            unit_map=unit_map
         ) if writer else False
         
         if not success:
