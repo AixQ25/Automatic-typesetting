@@ -40,13 +40,15 @@ BOARD_SPECS = [
 ]
 
 
-def find_optimal_boards(rects: List[Rect], spacing: float = 10.0) -> NestingResult:
+def find_optimal_boards(rects: List[Rect], spacing: float = 10.0, 
+                       margin: float = 10.0) -> NestingResult:
     """
     自动计算最优板材组合
     
     Args:
         rects: 矩形列表
         spacing: 间距
+        margin: 边缘留白
         
     Returns:
         NestingResult: 排版结果
@@ -60,7 +62,7 @@ def find_optimal_boards(rects: List[Rect], spacing: float = 10.0) -> NestingResu
     best_score = float('inf')
     
     # 策略1: 只用600x850
-    result1 = _try_single_board_type(rects, 600, 850, "600x850", spacing)
+    result1 = _try_single_board_type(rects, 600, 850, "600x850", spacing, margin)
     if result1 and result1.placed_shapes == len(rects):
         score = len(result1.boards) * 1000 + _total_waste(result1)
         if score < best_score:
@@ -68,7 +70,7 @@ def find_optimal_boards(rects: List[Rect], spacing: float = 10.0) -> NestingResu
             best_result = result1
     
     # 策略2: 只用400x850
-    result2 = _try_single_board_type(rects, 400, 850, "400x850", spacing)
+    result2 = _try_single_board_type(rects, 400, 850, "400x850", spacing, margin)
     if result2 and result2.placed_shapes == len(rects):
         score = len(result2.boards) * 1000 + _total_waste(result2)
         if score < best_score:
@@ -76,7 +78,7 @@ def find_optimal_boards(rects: List[Rect], spacing: float = 10.0) -> NestingResu
             best_result = result2
     
     # 策略3: 混合使用（先用600x850排大块，剩余用400x850）
-    result3 = _try_mixed_boards(rects, spacing)
+    result3 = _try_mixed_boards(rects, spacing, margin)
     if result3 and result3.placed_shapes == len(rects):
         score = len(result3.boards) * 1000 + _total_waste(result3)
         if score < best_score:
@@ -95,14 +97,14 @@ def find_optimal_boards(rects: List[Rect], spacing: float = 10.0) -> NestingResu
 
 
 def _try_single_board_type(rects: List[Rect], width: float, height: float,
-                           name: str, spacing: float) -> Optional[NestingResult]:
+                           name: str, spacing: float, margin: float = 10.0) -> Optional[NestingResult]:
     """尝试只用一种板材"""
     boards = []
     remaining = list(rects)
     board_index = 0
     
     while remaining:
-        nestor = RectNesting(width, height, spacing)
+        nestor = RectNesting(width, height, spacing, margin)
         placements = nestor.nest(remaining)
         
         if not placements:
@@ -136,7 +138,7 @@ def _try_single_board_type(rects: List[Rect], width: float, height: float,
     )
 
 
-def _try_mixed_boards(rects: List[Rect], spacing: float) -> Optional[NestingResult]:
+def _try_mixed_boards(rects: List[Rect], spacing: float, margin: float = 10.0) -> Optional[NestingResult]:
     """混合使用两种板材"""
     # 按面积降序排序
     sorted_rects = sorted(rects, key=lambda r: r.area, reverse=True)
@@ -148,11 +150,11 @@ def _try_mixed_boards(rects: List[Rect], spacing: float) -> Optional[NestingResu
     # 先尝试用600x850排大的
     while remaining:
         # 尝试600x850
-        nestor_large = RectNesting(600, 850, spacing)
+        nestor_large = RectNesting(600, 850, spacing, margin)
         placements_large = nestor_large.nest(remaining)
         
         # 尝试400x850
-        nestor_small = RectNesting(400, 850, spacing)
+        nestor_small = RectNesting(400, 850, spacing, margin)
         placements_small = nestor_small.nest(remaining)
         
         # 选择利用率更高的

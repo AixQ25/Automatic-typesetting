@@ -42,7 +42,8 @@ class Placement:
 class RectNesting:
     """矩形排样器"""
     
-    def __init__(self, board_width: float, board_height: float, spacing: float = 10.0):
+    def __init__(self, board_width: float, board_height: float, 
+                 spacing: float = 10.0, margin: float = 10.0):
         """
         初始化排样器
         
@@ -50,13 +51,15 @@ class RectNesting:
             board_width: 板材宽度
             board_height: 板材高度
             spacing: 图形间距
+            margin: 边缘留白
         """
         self.board_width = board_width
         self.board_height = board_height
         self.spacing = spacing
+        self.margin = margin
         
         # 可用位置列表 (x, y)
-        self.available_positions = [(0.0, 0.0)]
+        self.available_positions = [(margin, margin)]
         
         # 已放置的矩形
         self.placements: List[Placement] = []
@@ -67,7 +70,7 @@ class RectNesting:
     
     def reset(self):
         """重置排样器"""
-        self.available_positions = [(0.0, 0.0)]
+        self.available_positions = [(self.margin, self.margin)]
         self.placements = []
         self.current_row_height = 0.0
         self.current_row_x = 0.0
@@ -144,10 +147,10 @@ class RectNesting:
         
         # 遍历所有可用位置
         for x, y in self.available_positions[:]:
-            # 检查是否超出板材边界
-            if x + total_width > self.board_width:
+            # 检查是否超出板材边界（考虑边距）
+            if x + total_width > self.board_width - self.margin:
                 continue
-            if y + total_height > self.board_height:
+            if y + total_height > self.board_height - self.margin:
                 continue
             
             # 检查是否与已放置的矩形碰撞

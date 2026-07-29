@@ -96,7 +96,7 @@ for thickness, group in sorted(shape_groups.items()):
 print("\n6. 导出 DXF...")
 writer = DxfWriter('test.dxf')
 success = writer.write_multi_group_results(
-    results, 'test_output_with_containment.dxf', gap=20, unit_map=unit_map
+    results, 'temp/test_output_with_containment.dxf', gap=20, unit_map=unit_map
 )
 
 if success:
@@ -106,5 +106,5 @@ else:
 
 print("\n" + "=" * 60)
 print("测试完成！")
-print("请在AutoCAD中打开 test_output_with_containment.dxf 查看结果")
+print("请在AutoCAD中打开 temp/test_output_with_containment.dxf 查看结果")
 print("=" * 60)

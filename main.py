@@ -9,7 +9,8 @@ from typing import List, Dict
 
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QHBoxLayout, QLabel, QPushButton, QMessageBox,
-                             QFileDialog, QProgressBar, QTextEdit)
+                             QFileDialog, QProgressBar, QTextEdit,
+                             QDoubleSpinBox, QGroupBox)
 from PyQt5.QtCore import Qt
 
 import matplotlib
@@ -137,6 +138,18 @@ class AutoNestingApp(QMainWindow):
         control_layout.addWidget(self.file_label)
         
         control_layout.addStretch()
+        
+        # 间距设置
+        spacing_group = QGroupBox("间距设置")
+        spacing_layout = QHBoxLayout(spacing_group)
+        spacing_layout.addWidget(QLabel("图形间距:"))
+        self.spacing_spin = QDoubleSpinBox()
+        self.spacing_spin.setRange(3.0, 10.0)
+        self.spacing_spin.setValue(config.NESTING_SPACING)
+        self.spacing_spin.setSuffix(" mm")
+        self.spacing_spin.setSingleStep(0.5)
+        spacing_layout.addWidget(self.spacing_spin)
+        control_layout.addWidget(spacing_group)
         
         # 操作按钮
         self.nest_btn = QPushButton("执行排版")
@@ -284,7 +297,10 @@ class AutoNestingApp(QMainWindow):
             # 记录单元映射
             self.unit_map = {unit.handle: unit for unit in units}
             
-            result = find_optimal_boards(all_rects, spacing=config.NESTING_SPACING)
+            # 获取用户设置的间距
+            spacing = self.spacing_spin.value()
+            
+            result = find_optimal_boards(all_rects, spacing=spacing)
             shape_groups = {0.0: ShapeGroup(
                 thickness=0.0,
                 shapes=[{'handle': unit.handle, 'bbox': unit.outer.bbox, 'unit': unit} 
@@ -297,6 +313,9 @@ class AutoNestingApp(QMainWindow):
             # 为每组计算最优板材
             self.results = {}
             self.unit_map = {unit.handle: unit for unit in units}
+            
+            # 获取用户设置的间距
+            spacing = self.spacing_spin.value()
             
             for thickness, group in sorted(shape_groups.items()):
                 self.log(f"\n处理 {thickness}mm 组 ({len(group.shapes)} 个单元)")
@@ -313,7 +332,7 @@ class AutoNestingApp(QMainWindow):
                     ))
                 
                 # 自动计算最优板材
-                result = find_optimal_boards(rects, spacing=config.NESTING_SPACING)
+                result = find_optimal_boards(rects, spacing=spacing)
                 self.results[thickness] = result
                 
                 self.log(f"  板材方案: {len(result.boards)} 张")
