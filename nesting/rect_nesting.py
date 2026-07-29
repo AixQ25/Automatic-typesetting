@@ -1,11 +1,10 @@
 """
 矩形排样算法
-使用Best Fit Decreasing算法进行矩形排样
+使用改进的底部优先(Bottom-Left)算法
 """
 
 from typing import List, Tuple
 from dataclasses import dataclass
-import heapq
 
 
 @dataclass
@@ -40,7 +39,7 @@ class Placement:
 
 
 class RectNesting:
-    """矩形排样器"""
+    """矩形排样器 - 使用改进的底部优先算法"""
     
     def __init__(self, board_width: float, board_height: float, 
                  spacing: float = 10.0, margin: float = 10.0):
@@ -58,26 +57,22 @@ class RectNesting:
         self.spacing = spacing
         self.margin = margin
         
-        # 可用位置列表 (x, y)
-        self.available_positions = [(margin, margin)]
+        # 可用空间边界框
+        self.min_x = margin
+        self.min_y = margin
+        self.max_x = board_width - margin
+        self.max_y = board_height - margin
         
         # 已放置的矩形
         self.placements: List[Placement] = []
-        
-        # 当前行信息
-        self.current_row_height = 0.0
-        self.current_row_x = 0.0
     
     def reset(self):
         """重置排样器"""
-        self.available_positions = [(self.margin, self.margin)]
         self.placements = []
-        self.current_row_height = 0.0
-        self.current_row_x = 0.0
     
     def nest(self, rects: List[Rect]) -> List[Placement]:
         """
-        执行排样
+        执行排样 - 底部优先算法
         
         Args:
             rects: 矩形列表
@@ -87,7 +82,10 @@ class RectNesting:
         """
         self.reset()
         
-        # 按面积降序排序
+        if not rects:
+            return []
+        
+        # 按面积降序排序（大图形优先）
         sorted_rects = sorted(rects, key=lambda r: r.area, reverse=True)
         
         # 为每个矩形分配ID
@@ -99,14 +97,12 @@ class RectNesting:
             placement = self._place_rect(rect)
             if placement:
                 self.placements.append(placement)
-            else:
-                print(f"警告: 矩形 {rect.id} ({rect.width}x{rect.height}) 无法放置")
         
         return self.placements
     
     def _place_rect(self, rect: Rect) -> Placement:
         """
-        放置单个矩形
+        放置单个矩形 - 尝试不旋转和旋转两种方式
         
         Args:
             rect: 要放置的矩形
@@ -115,20 +111,20 @@ class RectNesting:
             Placement: 放置位置，如果无法放置则返回None
         """
         # 尝试不旋转
-        placement = self._try_place(rect, rotated=False)
+        placement = self._find_best_position(rect, rotated=False)
         if placement:
             return placement
         
         # 尝试旋转90°
-        placement = self._try_place(rect, rotated=True)
+        placement = self._find_best_position(rect, rotated=True)
         if placement:
             return placement
         
         return None
     
-    def _try_place(self, rect: Rect, rotated: bool) -> Placement:
+    def _find_best_position(self, rect: Rect, rotated: bool) -> Placement:
         """
-        尝试放置矩形
+        查找最佳放置位置 - 底部优先策略
         
         Args:
             rect: 矩形
@@ -137,7 +133,6 @@ class RectNesting:
         Returns:
             Placement: 放置位置
         """
-        # 实际尺寸
         actual_width = rect.height if rotated else rect.width
         actual_height = rect.width if rotated else rect.height
         
@@ -145,83 +140,106 @@ class RectNesting:
         total_width = actual_width + self.spacing
         total_height = actual_height + self.spacing
         
-        # 遍历所有可用位置
-        for x, y in self.available_positions[:]:
-            # 检查是否超出板材边界（考虑边距）
-            if x + total_width > self.board_width - self.margin:
-                continue
-            if y + total_height > self.board_height - self.margin:
-                continue
-            
-            # 检查是否与已放置的矩形碰撞
-            if not self._check_collision(x, y, total_width, total_height):
-                # 放置成功
-                placement = Placement(
+        # 检查是否能放入板材
+        if total_width > self.max_x - self.min_x:
+            return None
+        if total_height > self.max_y - self.min_y:
+            return None
+        
+        # 生成候选位置
+        candidates = self._generate_candidates(total_width, total_height)
+        
+        # 按Y坐标排序，然后按X坐标排序（底部优先）
+        candidates.sort(key=lambda p: (p[1], p[0]))
+        
+        # 尝试每个候选位置
+        for x, y in candidates:
+            if self._can_place(x, y, total_width, total_height):
+                return Placement(
                     rect=rect,
                     x=x,
                     y=y,
                     rotated=rotated
                 )
-                
-                # 更新可用位置
-                self._update_available_positions(x, y, total_width, total_height)
-                
-                return placement
         
         return None
     
-    def _check_collision(self, x: float, y: float, width: float, height: float) -> bool:
+    def _generate_candidates(self, width: float, height: float) -> List[Tuple[float, float]]:
         """
-        检查碰撞
+        生成候选放置位置
+        
+        Args:
+            width: 图形宽度（含间距）
+            height: 图形高度（含间距）
+            
+        Returns:
+            List[Tuple[float, float]]: 候选位置列表
+        """
+        candidates = []
+        
+        # 起始位置（左下角）
+        candidates.append((self.min_x, self.min_y))
+        
+        # 已放置图形的边缘位置
+        for p in self.placements:
+            px = p.x
+            py = p.y
+            pw = p.actual_width + self.spacing
+            ph = p.actual_height + self.spacing
+            
+            # 右边
+            right_x = px + pw
+            if right_x + width <= self.max_x:
+                candidates.append((right_x, py))
+            
+            # 上边
+            top_y = py + ph
+            if top_y + height <= self.max_y:
+                candidates.append((px, top_y))
+            
+            # 右上角
+            if right_x + width <= self.max_x and top_y + height <= self.max_y:
+                candidates.append((right_x, top_y))
+        
+        # 去重
+        candidates = list(set(candidates))
+        
+        return candidates
+    
+    def _can_place(self, x: float, y: float, width: float, height: float) -> bool:
+        """
+        检查是否可以放置
         
         Args:
             x, y: 位置
-            width, height: 尺寸（包含间距）
+            width, height: 尺寸（含间距）
             
         Returns:
-            bool: 是否碰撞
+            bool: 是否可以放置
         """
-        for placement in self.placements:
-            px = placement.x
-            py = placement.y
-            pw = placement.actual_width + self.spacing
-            ph = placement.actual_height + self.spacing
+        # 检查边界
+        if x + width > self.max_x:
+            return False
+        if y + height > self.max_y:
+            return False
+        if x < self.min_x:
+            return False
+        if y < self.min_y:
+            return False
+        
+        # 检查碰撞
+        for p in self.placements:
+            px = p.x
+            py = p.y
+            pw = p.actual_width + self.spacing
+            ph = p.actual_height + self.spacing
             
             # 矩形碰撞检测
             if (x < px + pw and x + width > px and
                 y < py + ph and y + height > py):
-                return True
+                return False
         
-        return False
-    
-    def _update_available_positions(self, x: float, y: float, width: float, height: float):
-        """
-        更新可用位置
-        
-        Args:
-            x, y: 放置位置
-            width, height: 尺寸（包含间距）
-        """
-        # 移除被占用的位置
-        self.available_positions = [
-            (px, py) for px, py in self.available_positions
-            if not (x <= px < x + width and y <= py < y + height)
-        ]
-        
-        # 添加新的可用位置（右边和上边）
-        new_positions = [
-            (x + width, y),  # 右边
-            (x, y + height),  # 上边
-        ]
-        
-        for pos in new_positions:
-            if pos not in self.available_positions:
-                # 检查是否在板材范围内
-                if pos[0] < self.board_width and pos[1] < self.board_height:
-                    self.available_positions.append(pos)
-        
-        # 按y坐标排序，然后按x坐标排序
-        self.available_positions.sort(key=lambda p: (p[1], p[0]))
+        return True
     
     def get_utilization(self) -> float:
         """
@@ -234,74 +252,30 @@ class RectNesting:
             return 0.0
         
         total_area = sum(p.rect.area for p in self.placements)
-        board_area = self.board_width * self.board_height
+        board_area = (self.max_x - self.min_x) * (self.max_y - self.min_y)
         
         return total_area / board_area if board_area > 0 else 0.0
-    
-    def print_result(self):
-        """打印排样结果"""
-        print("\n" + "=" * 50)
-        print("排样结果")
-        print("=" * 50)
-        print(f"板材尺寸: {self.board_width} x {self.board_height}")
-        print(f"间距: {self.spacing}")
-        print(f"放置矩形数: {len(self.placements)}")
-        print(f"利用率: {self.get_utilization():.1%}")
-        print("\n放置详情:")
-        for p in self.placements:
-            rotation = " (旋转90°)" if p.rotated else ""
-            print(f"  矩形{p.rect.id}: ({p.x:.1f}, {p.y:.1f}) "
-                  f"尺寸: {p.rect.width}x{p.rect.height}{rotation}")
 
 
-def create_rects_from_sizes(sizes: List[Tuple[float, float]]) -> List[Rect]:
-    """
-    从尺寸列表创建矩形列表
-    
-    Args:
-        sizes: 尺寸列表 [(width1, height1), (width2, height2), ...]
-        
-    Returns:
-        List[Rect]: 矩形列表
-    """
-    return [Rect(width=w, height=h) for w, h in sizes]
-
-
-# 测试函数
-def test_rect_nesting():
-    """测试矩形排样"""
-    print("测试矩形排样算法...")
-    
-    # 板材尺寸
-    board_width = 400
-    board_height = 850
-    spacing = 10
+# 测试
+if __name__ == '__main__':
+    import sys
+    sys.stdout.reconfigure(encoding='utf-8')
     
     # 创建测试矩形
-    sizes = [
-        (100, 50),
-        (80, 60),
-        (120, 40),
-        (90, 70),
-        (60, 80),
-        (110, 55),
-        (75, 65),
-        (95, 45),
+    rects = [
+        Rect(100, 50, id=0, handle='1'),
+        Rect(80, 60, id=1, handle='2'),
+        Rect(120, 40, id=2, handle='3'),
+        Rect(90, 70, id=3, handle='4'),
+        Rect(60, 80, id=4, handle='5'),
     ]
     
-    rects = create_rects_from_sizes(sizes)
-    
-    # 创建排样器
-    nestor = RectNesting(board_width, board_height, spacing)
-    
-    # 执行排样
+    nestor = RectNesting(400, 850, 10, 10)
     placements = nestor.nest(rects)
     
-    # 打印结果
-    nestor.print_result()
+    print(f"放置数量: {len(placements)}")
+    print(f"利用率: {nestor.get_utilization():.1%}")
     
-    return nestor
-
-
-if __name__ == "__main__":
-    test_rect_nesting()
+    for p in placements:
+        print(f"  {p.rect.handle}: ({p.x:.1f}, {p.y:.1f}) {p.actual_width:.1f}x{p.actual_height:.1f}")
