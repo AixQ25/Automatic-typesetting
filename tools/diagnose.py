@@ -81,20 +81,35 @@ def run(filepath: str, spacing: float = None) -> int:
     print(f"跳过标注: {[s.text for s in tp.skip_labels]}")
 
     # 按厚度分组
+    grouper = ShapeGrouper(y_tolerance=1000, x_search_range=5000)
     all_labels = [l for ls in tgroups.values() for l in ls]
-    sg = ShapeGrouper(y_tolerance=1000, x_search_range=5000).group_shapes(
-        [{'handle': u.handle, 'bbox': u.outer.bbox,
-          'layer': u.outer.layer, 'unit': u} for u in valid],
-        all_labels, tp.skip_labels)
-    grouped = {h for grp in sg.values() for h in [s['handle'] for s in grp.shapes]}
-    ungrouped = [u for u in valid if u.handle not in grouped]
-    if ungrouped:
-        sg.setdefault(0.0, ShapeGroup(thickness=0.0, shapes=[], label_x=0, label_y=0))
-        for u in ungrouped:
-            sg[0.0].shapes.append({'handle': u.handle, 'bbox': u.outer.bbox, 'unit': u})
-    print(f"分组结果: " + ", ".join(f"{k}:{len(v.shapes)}" for k, v in sorted(sg.items())))
-    if ungrouped:
-        print(f"  （其中 {len(ungrouped)} 个无厚度标注 -> 默认 0.0 组）")
+    
+    if not all_labels:
+        print("  未检测到厚度标注，启用按行分组策略...")
+        sg = grouper.fallback_row_grouping(
+            [{'handle': u.handle, 'bbox': u.outer.bbox,
+              'layer': u.outer.layer, 'unit': u} for u in valid],
+            row_y_tolerance=80.0
+        )
+    else:
+        sg = grouper.group_shapes(
+            [{'handle': u.handle, 'bbox': u.outer.bbox,
+              'layer': u.outer.layer, 'unit': u} for u in valid],
+            all_labels, tp.skip_labels)
+        grouped = {h for grp in sg.values() for h in [s['handle'] for s in grp.shapes]}
+        ungrouped = [u for u in valid if u.handle not in grouped]
+        if ungrouped:
+            print(f"  未分组单元: {len(ungrouped)} 个，按行分组处理")
+            row_sg = grouper.fallback_row_grouping(
+                [{'handle': u.handle, 'bbox': u.outer.bbox, 'unit': u} for u in ungrouped],
+                row_y_tolerance=80.0
+            )
+            sg.update(row_sg)
+    
+    print(f"分组结果: " + ", ".join(
+        f"{ShapeGrouper.get_row_display_name(k)}:{len(v.shapes)}"
+        for k, v in sorted(sg.items())
+    ))
 
     # 排版
     print("-" * 60)
@@ -113,7 +128,8 @@ def run(filepath: str, spacing: float = None) -> int:
         unplaced = len(grp.shapes) - res.placed_shapes
         total_unplaced += unplaced
         utils = [round(b.utilization * 100) for b in res.boards]
-        print(f"  {th}mm: 单元 {len(grp.shapes)} | 板材 {len(res.boards)} | "
+        th_display = ShapeGrouper.get_row_display_name(th)
+        print(f"  {th_display}: 单元 {len(grp.shapes)} | 板材 {len(res.boards)} | "
               f"放置 {res.placed_shapes} | 未放置 {unplaced} | 利用率 {utils}")
 
     print("-" * 60)

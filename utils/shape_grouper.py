@@ -33,16 +33,32 @@ class ShapeGroup:
 class ShapeGrouper:
     """形状分组器"""
     
+    # 虚拟行组厚度基准值（>=此值表示是按行分组的虚拟厚度，非真实厚度）
+    VIRTUAL_ROW_BASE = 1000.0
+    
     def __init__(self, y_tolerance: float = 500.0, x_search_range: float = 2000.0):
         """
         初始化分组器
         
         Args:
-            y_tolerance: Y坐标容差（同一行的判断标准）
+            y_tolerance: Y坐标容差（搜索标注时的判断标准）
             x_search_range: X搜索范围（搜索标注的距离）
         """
         self.y_tolerance = y_tolerance
         self.x_search_range = x_search_range
+    
+    @staticmethod
+    def is_virtual_thickness(thickness: float) -> bool:
+        """判断是否为虚拟行组厚度"""
+        return thickness >= ShapeGrouper.VIRTUAL_ROW_BASE
+    
+    @staticmethod
+    def get_row_display_name(thickness: float) -> str:
+        """获取行组的显示名称，如 '行1', '行2'"""
+        if not ShapeGrouper.is_virtual_thickness(thickness):
+            return f"{thickness}mm"
+        row_idx = int(thickness - ShapeGrouper.VIRTUAL_ROW_BASE + 1)
+        return f"行{row_idx}"
     
     def group_shapes(self, shapes: List[dict], 
                      thickness_labels: List[ThicknessLabel],
@@ -88,6 +104,72 @@ class ShapeGrouper:
                     label_y=best_label.y,
                 )
             groups[th].shapes.append(shape)
+        
+        return groups
+    
+    def fallback_row_grouping(self, shapes: List[dict],
+                              row_y_tolerance: float = 80.0) -> Dict[float, ShapeGroup]:
+        """
+        按Y坐标行分组（无厚度标注时的备用策略）
+        
+        将Y坐标相近的图形聚类为同一行，每行作为一个独立的"厚度组"。
+        虚拟厚度值从 VIRTUAL_ROW_BASE 开始递增，避免与真实厚度冲突。
+        
+        Args:
+            shapes: 图形列表
+            row_y_tolerance: Y坐标容差，同一行内图形的Y最大允许差值(mm)
+            
+        Returns:
+            Dict[float, ShapeGroup]: 按虚拟厚度分组的图形
+        """
+        if not shapes:
+            return {}
+        
+        # 提取图形中心Y坐标
+        shapes_with_y = []
+        for shape in shapes:
+            bbox = shape.get('bbox')
+            if not bbox:
+                continue
+            cy = (bbox.y_min + bbox.y_max) / 2
+            shapes_with_y.append((cy, shape))
+        
+        if not shapes_with_y:
+            return {}
+        
+        # 按Y坐标降序排列（从上到下）
+        shapes_with_y.sort(key=lambda x: x[0], reverse=True)
+        
+        # 聚类：Y坐标差 <= row_y_tolerance 的归为一行
+        rows = []
+        current_row = [shapes_with_y[0]]
+        current_y = shapes_with_y[0][0]
+        
+        for cy, shape in shapes_with_y[1:]:
+            if abs(cy - current_y) <= row_y_tolerance:
+                current_row.append((cy, shape))
+            else:
+                rows.append(current_row)
+                current_row = [(cy, shape)]
+                current_y = cy
+        
+        if current_row:
+            rows.append(current_row)
+        
+        # 为每行分配虚拟厚度值
+        groups = {}
+        for i, row in enumerate(rows):
+            virtual_thickness = self.VIRTUAL_ROW_BASE + i
+            avg_y = sum(cy for cy, _ in row) / len(row)
+            min_x = min(shape['bbox'].x_min for _, shape in row)
+            
+            group = ShapeGroup(
+                thickness=virtual_thickness,
+                shapes=[shape for _, shape in row],
+                label_x=min_x,
+                label_y=avg_y
+            )
+            groups[virtual_thickness] = group
         
         return groups
     
@@ -181,8 +263,25 @@ if __name__ == '__main__':
     grouper = ShapeGrouper()
     groups = grouper.group_shapes(shapes, thickness_labels, skip_labels)
     
-    print("分组结果:")
+    print("标注分组结果:")
     for thickness, group in sorted(groups.items()):
-        print(f"  {thickness}mm: {len(group.shapes)} 个图形")
+        display = ShapeGrouper.get_row_display_name(thickness)
+        print(f"  {display}: {len(group.shapes)} 个图形")
+        for shape in group.shapes:
+            print(f"    - {shape['handle']}")
+    
+    # 测试行分组备用策略
+    print("\n行分组备用策略测试:")
+    row_shapes = [
+        {'handle': 'r1a', 'bbox': type('BBox', (), {'x_min': 100, 'x_max': 200, 'y_min': 480, 'y_max': 520})()},
+        {'handle': 'r1b', 'bbox': type('BBox', (), {'x_min': 300, 'x_max': 400, 'y_min': 485, 'y_max': 515})()},
+        {'handle': 'r2a', 'bbox': type('BBox', (), {'x_min': 100, 'x_max': 200, 'y_min': 280, 'y_max': 320})()},
+        {'handle': 'r2b', 'bbox': type('BBox', (), {'x_min': 300, 'x_max': 400, 'y_min': 275, 'y_max': 325})()},
+        {'handle': 'r3',  'bbox': type('BBox', (), {'x_min': 500, 'x_max': 600, 'y_min': 80, 'y_max': 120})()},
+    ]
+    row_groups = grouper.fallback_row_grouping(row_shapes, row_y_tolerance=50.0)
+    for thickness, group in sorted(row_groups.items()):
+        display = ShapeGrouper.get_row_display_name(thickness)
+        print(f"  {display}: {len(group.shapes)} 个图形 (Y≈{group.label_y:.0f})")
         for shape in group.shapes:
             print(f"    - {shape['handle']}")

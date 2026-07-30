@@ -85,8 +85,9 @@ class PreviewCanvas(FigureCanvas):
             self.axes.plot([x0, x0 + board.width, x0 + board.width, x0, x0],
                           [y0, y0, y0 + board.height, y0 + board.height, y0],
                           'k-', linewidth=2)
+            th_display = ShapeGrouper.get_row_display_name(thickness)
             self.axes.text(x0 + board.width/2, y0 + board.height + 5,
-                          f'{thickness}mm - {board.name}',
+                          f'{th_display} - {board.name}',
                           ha='center', va='bottom', fontsize=8, color=color)
             
             for p in board.placements:
@@ -283,47 +284,52 @@ class AutoNestingApp(QMainWindow):
         
         # 按厚度分组（使用单元的外层边界）
         grouper = ShapeGrouper(y_tolerance=1000, x_search_range=5000)
-        shape_groups = grouper.group_shapes(
-            [{'handle': unit.handle, 'bbox': unit.outer.bbox,
-              'layer': unit.outer.layer, 'unit': unit}
-             for unit in valid_units],
-            [label for labels in thickness_groups_labels.values() for label in labels],
-            text_parser.skip_labels
-        )
+        all_labels = [label for labels in thickness_groups_labels.values() for label in labels]
         
-        # 找出未分组的单元
-        grouped_handles = set()
-        for group in shape_groups.values():
-            for shape in group.shapes:
-                grouped_handles.add(shape['handle'])
-        
-        ungrouped_units = [u for u in valid_units if u.handle not in grouped_handles]
-        
-        if ungrouped_units:
-            self.log(f"  未分组单元: {len(ungrouped_units)} 个，归入默认组")
-            # 将未分组的单元添加到默认组
-            if 0.0 not in shape_groups:
-                shape_groups[0.0] = ShapeGroup(
-                    thickness=0.0,
-                    shapes=[],
-                    label_x=0,
-                    label_y=0
+        if not all_labels:
+            # 完全没有厚度标注 → 全部按行分组
+            self.log("  未检测到厚度标注，启用按行分组策略...")
+            shape_groups = grouper.fallback_row_grouping(
+                [{'handle': unit.handle, 'bbox': unit.outer.bbox,
+                  'layer': unit.outer.layer, 'unit': unit}
+                 for unit in valid_units],
+                row_y_tolerance=80.0
+            )
+        else:
+            # 有标注 → 先按标注分组
+            shape_groups = grouper.group_shapes(
+                [{'handle': unit.handle, 'bbox': unit.outer.bbox,
+                  'layer': unit.outer.layer, 'unit': unit}
+                 for unit in valid_units],
+                all_labels,
+                text_parser.skip_labels
+            )
+            
+            # 处理未分组的单元（按行分组）
+            grouped_handles = set()
+            for group in shape_groups.values():
+                for shape in group.shapes:
+                    grouped_handles.add(shape['handle'])
+            
+            ungrouped_units = [u for u in valid_units if u.handle not in grouped_handles]
+            
+            if ungrouped_units:
+                self.log(f"  未分组单元: {len(ungrouped_units)} 个，按行分组处理")
+                row_groups = grouper.fallback_row_grouping(
+                    [{'handle': unit.handle, 'bbox': unit.outer.bbox,
+                      'layer': unit.outer.layer, 'unit': unit}
+                     for unit in ungrouped_units],
+                    row_y_tolerance=80.0
                 )
-            for unit in ungrouped_units:
-                shape_groups[0.0].shapes.append({
-                    'handle': unit.handle,
-                    'bbox': unit.outer.bbox,
-                    'layer': unit.outer.layer,
-                    'unit': unit,
-                })
+                shape_groups.update(row_groups)
         
         self.log(f"\n{'='*40}")
         self.log("开始排版")
         self.log(f"{'='*40}")
         
-        # 如果没有厚度标注，将所有单元作为一组
+        # 安全网：如果 row grouping 也失败（理论上不会，除非无有效单元）
         if not shape_groups:
-            self.log("未找到厚度标注，将所有图形作为一组处理")
+            self.log("警告: 无任何有效分组，将所有图形作为一组处理")
             all_rects = []
             for i, unit in enumerate(valid_units):
                 all_rects.append(Rect(
@@ -358,7 +364,8 @@ class AutoNestingApp(QMainWindow):
             spacing = self.spacing_spin.value()
             
             for thickness, group in sorted(shape_groups.items()):
-                self.log(f"\n处理 {thickness}mm 组 ({len(group.shapes)} 个单元)")
+                th_display = ShapeGrouper.get_row_display_name(thickness)
+                self.log(f"\n处理 {th_display} 组 ({len(group.shapes)} 个单元)")
                 
                 # 创建矩形列表
                 rects = []

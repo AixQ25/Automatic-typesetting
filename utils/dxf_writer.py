@@ -92,9 +92,13 @@ class DxfWriter:
                     row_max_height = 0.0
                 
                 # 建图层（按厚度的颜色）
-                layer_name = f"{thickness}mm"
-                if layer_name not in self.target_doc.layers:
+                if thickness >= 1000:
+                    layer_name = f"行{int(thickness - 1000 + 1)}"
                     color = thickness_colors.get(thickness, 7)
+                else:
+                    layer_name = f"{thickness}mm"
+                    color = thickness_colors.get(thickness, 7)
+                if layer_name not in self.target_doc.layers:
                     self.target_doc.layers.add(layer_name, color=color)
                 
                 x0 = x
@@ -110,8 +114,13 @@ class DxfWriter:
                 ], dxfattribs={'layer': layer_name})
                 
                 # 板材标签：长*宽*厚，放框上方
+                # 虚拟行组（>=1000）显示为"行N"而非厚度值
+                if thickness >= 1000:
+                    th_display = f"行{int(thickness - 1000 + 1)}"
+                else:
+                    th_display = f"{thickness}"
                 msp.add_text(
-                    f"{board.width:.0f}*{board.height:.0f}*{thickness}",
+                    f"{board.width:.0f}*{board.height:.0f}*{th_display}",
                     dxfattribs={
                         'layer': layer_name,
                         'height': 15,
