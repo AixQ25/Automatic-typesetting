@@ -33,17 +33,23 @@ class NestingResult:
     total_utilization: float
 
 
-# 可用板材规格
+# 统一板材规格：只用 600x850
 BOARD_SPECS = [
     (600, 850, "600x850"),
-    (400, 850, "400x850"),
 ]
+
+# 标准板材尺寸
+STANDARD_BOARD_WIDTH = 600.0
+STANDARD_BOARD_HEIGHT = 850.0
+STANDARD_BOARD_NAME = "600x850"
 
 
 def find_optimal_boards(rects: List[Rect], spacing: float = 10.0, 
-                       margin: float = 10.0) -> NestingResult:
+                        margin: float = 10.0) -> NestingResult:
     """
-    自动计算最优板材组合
+    自动计算板材方案（统一只用 600x850）
+    
+    每种厚度组从 1 张 600x850 开始排，装不下就追加新板材，直到全部装完。
     
     Args:
         rects: 矩形列表
@@ -57,57 +63,37 @@ def find_optimal_boards(rects: List[Rect], spacing: float = 10.0,
         return NestingResult(thickness=0, boards=[], total_shapes=0,
                            placed_shapes=0, total_utilization=0)
     
-    # 尝试不同板材组合，找最优方案
-    best_result = None
-    best_score = float('inf')
+    result = _try_single_board_type(
+        rects, STANDARD_BOARD_WIDTH, STANDARD_BOARD_HEIGHT,
+        STANDARD_BOARD_NAME, spacing, margin
+    )
     
-    # 策略1: 只用600x850
-    result1 = _try_single_board_type(rects, 600, 850, "600x850", spacing, margin)
-    if result1 and result1.placed_shapes == len(rects):
-        score = len(result1.boards) * 1000 + _total_waste(result1)
-        if score < best_score:
-            best_score = score
-            best_result = result1
-    
-    # 策略2: 只用400x850
-    result2 = _try_single_board_type(rects, 400, 850, "400x850", spacing, margin)
-    if result2 and result2.placed_shapes == len(rects):
-        score = len(result2.boards) * 1000 + _total_waste(result2)
-        if score < best_score:
-            best_score = score
-            best_result = result2
-    
-    # 策略3: 混合使用（先用600x850排大块，剩余用400x850）
-    result3 = _try_mixed_boards(rects, spacing, margin)
-    if result3 and result3.placed_shapes == len(rects):
-        score = len(result3.boards) * 1000 + _total_waste(result3)
-        if score < best_score:
-            best_score = score
-            best_result = result3
-    
-    # 如果都排不下，用能排最多的方案
-    if best_result is None:
-        best_result = result1 or result2 or result3
-        if best_result is None:
-            best_result = NestingResult(thickness=0, boards=[], 
-                                       total_shapes=len(rects),
-                                       placed_shapes=0, total_utilization=0)
-    
-    return best_result
+    if result is None:
+        result = NestingResult(thickness=0, boards=[],
+                               total_shapes=len(rects),
+                               placed_shapes=0, total_utilization=0)
+    return result
 
 
 def _try_single_board_type(rects: List[Rect], width: float, height: float,
                            name: str, spacing: float, margin: float = 10.0) -> Optional[NestingResult]:
-    """尝试只用一种板材"""
+    """尝试只用一种板材，装不下就追加新板材直到全部装完"""
     boards = []
     remaining = list(rects)
     board_index = 0
+    # 防止死循环：若某轮一个都没放下（剩余件都超大），则停止
+    safety = 0
     
     while remaining:
+        safety += 1
+        if safety > 1000:
+            break
+        
         nestor = RectNesting(width, height, spacing, margin)
         placements = nestor.nest(remaining)
         
         if not placements:
+            # 本轮一个都没放下：剩余件必然都超大，无法装入 600x850
             break
         
         # 获取成功放置的矩形
@@ -122,67 +108,6 @@ def _try_single_board_type(rects: List[Rect], width: float, height: float,
         boards.append(board)
         
         # 移除已放置的
-        remaining = [r for r in remaining if r.handle not in placed_handles]
-        board_index += 1
-    
-    total_placed = sum(len(b.placements) for b in boards)
-    total_area = sum(b.width * b.height for b in boards)
-    used_area = sum(p.rect.area for b in boards for p in b.placements)
-    
-    return NestingResult(
-        thickness=0,
-        boards=boards,
-        total_shapes=len(rects),
-        placed_shapes=total_placed,
-        total_utilization=used_area / total_area if total_area > 0 else 0
-    )
-
-
-def _try_mixed_boards(rects: List[Rect], spacing: float, margin: float = 10.0) -> Optional[NestingResult]:
-    """混合使用两种板材"""
-    # 按面积降序排序
-    sorted_rects = sorted(rects, key=lambda r: r.area, reverse=True)
-    
-    boards = []
-    remaining = list(sorted_rects)
-    board_index = 0
-    
-    # 先尝试用600x850排大的
-    while remaining:
-        # 尝试600x850
-        nestor_large = RectNesting(600, 850, spacing, margin)
-        placements_large = nestor_large.nest(remaining)
-        
-        # 尝试400x850
-        nestor_small = RectNesting(400, 850, spacing, margin)
-        placements_small = nestor_small.nest(remaining)
-        
-        # 选择利用率更高的
-        if placements_large and (not placements_small or 
-            nestor_large.get_utilization() >= nestor_small.get_utilization()):
-            placements = placements_large
-            width, height, name = 600, 850, "600x850"
-            utilization = nestor_large.get_utilization()
-        elif placements_small:
-            placements = placements_small
-            width, height, name = 400, 850, "400x850"
-            utilization = nestor_small.get_utilization()
-        else:
-            break
-        
-        if not placements:
-            break
-        
-        placed_handles = {p.rect.handle for p in placements if p.rect.handle}
-        board = Board(
-            width=width,
-            height=height,
-            name=f"{name}#{board_index + 1}",
-            placements=placements,
-            utilization=utilization
-        )
-        boards.append(board)
-        
         remaining = [r for r in remaining if r.handle not in placed_handles]
         board_index += 1
     

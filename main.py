@@ -39,7 +39,7 @@ class PreviewCanvas(FigureCanvas):
         self.axes = self.fig.add_subplot(111)
     
     def draw_multi_group(self, results: Dict[float, NestingResult]):
-        """绘制多组排版结果"""
+        """绘制多组排版结果（板子统一横排，一行放不下换行）"""
         self.axes.clear()
         
         if not results:
@@ -48,60 +48,64 @@ class PreviewCanvas(FigureCanvas):
             self.draw()
             return
         
-        # 计算布局
+        # 厚度 -> 颜色
         n_groups = len(results)
-        board_widths = []
-        for thickness, result in sorted(results.items()):
-            max_width = max(b.width for b in result.boards) if result.boards else 0
-            board_widths.append(max_width)
+        colors = ['#2196F3', '#4CAF50', '#FF5722', '#00BCD4', '#E91E63',
+                  '#9C27B0', '#FF9800', '#795548', '#607D8B']
+        th_color = {th: colors[i % len(colors)]
+                    for i, th in enumerate(sorted(results.keys()))}
         
-        # 水平排列各组
-        x_offset = 0
-        gap = 20  # 组间距
+        # 把所有厚度的板平铺，按厚度升序、厚度内按 boards 顺序
+        all_boards = []
+        for thickness in sorted(results.keys()):
+            for board in results[thickness].boards:
+                all_boards.append((thickness, board))
         
-        colors = ['#2196F3', '#4CAF50', '#FF5722', '#00BCD4', '#E91E63']
+        # 横向排列（一行装不下换行）。canvas 用向下生长的 Y 方向以与显示习惯一致
+        gap = 20           # 同行板间距
+        row_gap = 20       # 行间距
+        max_row_width = 4000  # 单行最大宽度(mm)，超过则换行
         
-        for idx, (thickness, result) in enumerate(sorted(results.items())):
-            color = colors[idx % len(colors)]
+        x = 0.0
+        y = 0.0
+        row_max_h = 0.0
+        
+        for thickness, board in all_boards:
+            if x > 0 and x + board.width > max_row_width + 1e-6:
+                x = 0.0
+                y -= board.height + row_gap
+                row_max_h = board.height
+            else:
+                row_max_h = max(row_max_h, board.height)
             
-            for board_idx, board in enumerate(result.boards):
-                # 绘制板材边框
-                x0 = x_offset
-                y0 = -board.height - board_idx * (board.height + gap)
-                
-                self.axes.plot([x0, x0 + board.width, x0 + board.width, x0, x0],
-                              [y0, y0, y0 + board.height, y0 + board.height, y0],
-                              'k-', linewidth=2)
-                
-                # 绘制板材标签
-                self.axes.text(x0 + board.width/2, y0 + board.height + 5,
-                              f'{thickness}mm - {board.name}',
-                              ha='center', va='bottom', fontsize=8, color=color)
-                
-                # 绘制放置的图形
-                for p in board.placements:
-                    px = x0 + p.x
-                    py = y0 + p.y
-                    w = p.actual_width
-                    h = p.actual_height
-                    
-                    rect = mpatches.Rectangle((px, py), w, h,
-                                             linewidth=1, edgecolor=color,
-                                             facecolor=color, alpha=0.3)
-                    self.axes.add_patch(rect)
-                    self.axes.text(px + w/2, py + h/2, str(p.rect.id),
-                                  ha='center', va='center', fontsize=6)
+            x0 = x
+            y0 = y - board.height   # 板底对齐 y 行基线
             
-            # 更新下一组的X偏移
-            if result.boards:
-                max_width = max(b.width for b in result.boards)
-                x_offset += max_width + gap
+            color = th_color[thickness]
+            self.axes.plot([x0, x0 + board.width, x0 + board.width, x0, x0],
+                          [y0, y0, y0 + board.height, y0 + board.height, y0],
+                          'k-', linewidth=2)
+            self.axes.text(x0 + board.width/2, y0 + board.height + 5,
+                          f'{thickness}mm - {board.name}',
+                          ha='center', va='bottom', fontsize=8, color=color)
+            
+            for p in board.placements:
+                px = x0 + p.x
+                py = y0 + p.y
+                w = p.actual_width
+                h = p.actual_height
+                rect = mpatches.Rectangle((px, py), w, h,
+                                         linewidth=1, edgecolor=color,
+                                         facecolor=color, alpha=0.3)
+                self.axes.add_patch(rect)
+                self.axes.text(px + w/2, py + h/2, str(p.rect.id),
+                              ha='center', va='center', fontsize=6)
+            
+            x += board.width + gap
         
-        # 设置坐标轴
         self.axes.set_aspect('equal')
         self.axes.grid(True, alpha=0.3)
         self.axes.set_title(f'排版预览 ({n_groups} 个厚度组)')
-        
         self.draw()
 
 
@@ -253,29 +257,19 @@ class AutoNestingApp(QMainWindow):
             QMessageBox.warning(self, "警告", "没有有效图形")
             return
         
-        # 检测包含关系
-        self.log("\n检测图形包含关系...")
+        # 检测包含关系（先剥离容器/超大框，再识别外框+内件的整体，防丢件）
+        self.log("\n检测图形包含关系（含容器剥离）...")
         detector = ContainmentDetector()
         units = detector.detect(shapes)
         
         self.log(f"  检测到 {len(units)} 个图形单元")
         
-        # 过滤超大单元（宽度或高度超过最大板材）
-        max_board_width = 600 - 20  # 板材宽度 - 边距
-        max_board_height = 850 - 20  # 板材高度 - 边距
-        
-        valid_units = []
-        skipped_units = []
-        for unit in units:
-            w = unit.outer.bbox.width
-            h = unit.outer.bbox.height
-            if w > max_board_width or h > max_board_height:
-                skipped_units.append(unit)
-            else:
-                valid_units.append(unit)
+        # 过滤超大单元/参考框：检测器已标记 oversized
+        valid_units = [u for u in units if not u.oversized]
+        skipped_units = [u for u in units if u.oversized]
         
         if skipped_units:
-            self.log(f"  跳过 {len(skipped_units)} 个超大单元:")
+            self.log(f"  略过 {len(skipped_units)} 个超大单元/参考框:")
             for unit in skipped_units[:5]:
                 self.log(f"    - {unit.handle}: {unit.outer.bbox.width:.0f}x{unit.outer.bbox.height:.0f}mm")
             if len(skipped_units) > 5:
@@ -290,7 +284,8 @@ class AutoNestingApp(QMainWindow):
         # 按厚度分组（使用单元的外层边界）
         grouper = ShapeGrouper(y_tolerance=1000, x_search_range=5000)
         shape_groups = grouper.group_shapes(
-            [{'handle': unit.handle, 'bbox': unit.outer.bbox, 'unit': unit} 
+            [{'handle': unit.handle, 'bbox': unit.outer.bbox,
+              'layer': unit.outer.layer, 'unit': unit}
              for unit in valid_units],
             [label for labels in thickness_groups_labels.values() for label in labels],
             text_parser.skip_labels
@@ -318,7 +313,8 @@ class AutoNestingApp(QMainWindow):
                 shape_groups[0.0].shapes.append({
                     'handle': unit.handle,
                     'bbox': unit.outer.bbox,
-                    'unit': unit
+                    'layer': unit.outer.layer,
+                    'unit': unit,
                 })
         
         self.log(f"\n{'='*40}")
@@ -346,7 +342,8 @@ class AutoNestingApp(QMainWindow):
             result = find_optimal_boards(all_rects, spacing=spacing)
             shape_groups = {0.0: ShapeGroup(
                 thickness=0.0,
-                shapes=[{'handle': unit.handle, 'bbox': unit.outer.bbox, 'unit': unit} 
+                shapes=[{'handle': unit.handle, 'bbox': unit.outer.bbox,
+                        'layer': unit.outer.layer, 'unit': unit}
                         for unit in valid_units],
                 label_x=0,
                 label_y=0

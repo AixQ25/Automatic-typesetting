@@ -29,17 +29,26 @@ class DxfWriter:
         self.source_path = source_dxf_path
         self.source_doc = None
         self.target_doc = None
+        self._last_save_path = None
     
     def write_multi_group_results(self, results: Dict, output_path: str,
-                                  gap: float = 50.0, unit_map: Dict = None) -> bool:
+                                  gap: float = 50.0, unit_map: Dict = None,
+                                  max_row_width: float = 6000.0,
+                                  row_gap: float = 50.0) -> bool:
         """
         写入多组排版结果到DXF文件
+        
+        布局：所有板材（不分厚度）统一横向排列：从左到右依次摆放，
+        当本行累计宽度超过 max_row_width 时换行（在新一行继续从左开始）。
+        每张板块按其所属厚度分图层着色，框上方标 `长*宽*厚`。
         
         Args:
             results: Dict[float, NestingResult] 按厚度分组的排版结果
             output_path: 输出文件路径
-            gap: 组间距 (mm)，默认50mm
+            gap: 同行板材之间的水平间距 (mm)
             unit_map: Dict[str, ShapeUnit] 单元映射（可选，用于保留内部结构）
+            max_row_width: 单行最大宽度，超过则换行 (mm)
+            row_gap: 行间距 (mm)
             
         Returns:
             bool: 是否成功
@@ -50,7 +59,10 @@ class DxfWriter:
             self.target_doc.units = units.MM
             msp = self.target_doc.modelspace()
             
-            # 定义颜色
+            # 从源文件复刻图层表（保留原始图层名与颜色，使零件不改变颜色）
+            self._import_source_layers()
+            
+            # 定义颜色（仅用于"厚度图层"，板块边框使用）
             thickness_colors = {
                 0.5: 1,   # 红色
                 1.0: 2,   # 黄色
@@ -58,65 +70,68 @@ class DxfWriter:
                 2.0: 4,   # 青色
                 3.0: 5,   # 蓝色
                 4.0: 6,   # 洋红
+                4.5: 6,   # 洋红
             }
             
-            # 水平排列各组
-            x_offset = 0
-            
+            # 把所有厚度的板平铺为一个有序列表：按厚度升序，厚度内按 boards 顺序
+            all_boards = []
             for thickness in sorted(results.keys()):
-                result = results[thickness]
-                if not result.boards:
-                    continue
+                for board in results[thickness].boards:
+                    all_boards.append((thickness, board))
+            
+            # 横向排列（一行装不下换行）
+            x = 0.0
+            y = 50.0  # 顶部留 50mm 边距
+            row_max_height = 0.0
+            
+            for thickness, board in all_boards:
+                # 换行判定（首板不换）
+                if x > 0 and x + board.width > max_row_width + 1e-6:
+                    x = 0.0
+                    y += row_max_height + row_gap
+                    row_max_height = 0.0
                 
-                # 创建图层
+                # 建图层（按厚度的颜色）
                 layer_name = f"{thickness}mm"
-                color = thickness_colors.get(thickness, 7)
                 if layer_name not in self.target_doc.layers:
+                    color = thickness_colors.get(thickness, 7)
                     self.target_doc.layers.add(layer_name, color=color)
                 
-                # 计算本组最大宽度
-                max_board_width = max(b.width for b in result.boards)
+                x0 = x
+                y0 = y
                 
-                # 绘制每个板材
-                y_offset = 50  # 顶部留50mm边距，方便操作
+                # 板材边框
+                msp.add_lwpolyline([
+                    (x0, y0),
+                    (x0 + board.width, y0),
+                    (x0 + board.width, y0 + board.height),
+                    (x0, y0 + board.height),
+                    (x0, y0),
+                ], dxfattribs={'layer': layer_name})
                 
-                for board_idx, board in enumerate(result.boards):
-                    # 板材边框
-                    x0 = x_offset
-                    y0 = y_offset
-                    
-                    # 绘制板材边框
-                    msp.add_lwpolyline([
-                        (x0, y0),
-                        (x0 + board.width, y0),
-                        (x0 + board.width, y0 + board.height),
-                        (x0, y0 + board.height),
-                        (x0, y0),
-                    ], dxfattribs={'layer': layer_name})
-                    
-                    # 添加板材标签（格式：长*宽*厚，在框的上方）
-                    msp.add_text(
-                        f"{board.width:.0f}*{board.height:.0f}*{thickness}",
-                        dxfattribs={
-                            'layer': layer_name,
-                            'height': 15,  # 字体高度15mm
-                            'insert': (x0 + board.width / 2, y0 + board.height + 10)
-                        }
-                    )
-                    
-                    # 绘制放置的图形
-                    for p in board.placements:
-                        self._draw_placement_with_unit(msp, p, x0, y0, 
-                                                     layer_name, unit_map)
-                    
-                    # 更新Y偏移（板材间距改为50mm）
-                    y_offset += board.height + 50
+                # 板材标签：长*宽*厚，放框上方
+                msp.add_text(
+                    f"{board.width:.0f}*{board.height:.0f}*{thickness}",
+                    dxfattribs={
+                        'layer': layer_name,
+                        'height': 15,
+                        'insert': (x0 + board.width / 2, y0 + board.height + 10),
+                    }
+                )
                 
-                # 更新X偏移
-                x_offset += max_board_width + gap
+                # 放置图形
+                for p in board.placements:
+                    self._draw_placement_with_unit(msp, p, x0, y0,
+                                                 layer_name, unit_map)
+                
+                x += board.width + gap
+                row_max_height = max(row_max_height, board.height)
             
             # 保存文件
+            self._last_save_path = output_path
             self.target_doc.saveas(output_path)
+            # saveas 会把 EXTMIN/MAX 重置为 ±1e20，须保存后再改并再次保存
+            self._recalculate_extents()
             print(f"排版结果已保存到: {output_path}")
             return True
             
@@ -126,17 +141,112 @@ class DxfWriter:
             traceback.print_exc()
             return False
     
+    def _import_source_layers(self):
+        """从源DXF复刻图层表（名称+颜色），使零件保留原始图层与颜色。"""
+        try:
+            src = ezdxf.readfile(self.source_path)
+        except Exception:
+            return
+        for src_layer in src.layers:
+            name = src_layer.dxf.name
+            if name in self.target_doc.layers:
+                continue
+            try:
+                self.target_doc.layers.add(name, color=src_layer.dxf.color)
+            except Exception:
+                pass
+    
+    def _recalculate_extents(self):
+        """重算 EXTMIN/EXTMAX/LIMMIN/LIMMAX，避免 CAD 打开时视野被无效范围卡死。
+        ezdxf saveas 会把 EXTMIN/MAX 强行重置为 ±1e20，导致 AutoCAD 打开后滚轮缩放几乎
+        无反应、上下也拖不动。这里在 saveas 之后直接以纯文本方式修补 DXF 文件中
+        $EXTMIN/$EXTMAX/$LIMMIN/$LIMMAX 后继数值，避开 ezdxf 的覆盖。
+        """
+        try:
+            path = self._last_save_path
+            if not path or not os.path.exists(path):
+                return
+            # 用 ezdxf 读回，计算实际范围
+            doc = ezdxf.readfile(path)
+            msp = doc.modelspace()
+            min_x = min_y = float('inf')
+            max_x = max_y = float('-inf')
+            found = False
+            for e in msp:
+                pts = self._entity_xy(e)
+                if not pts:
+                    continue
+                found = True
+                for x, y in pts:
+                    if x < min_x: min_x = x
+                    if y < min_y: min_y = y
+                    if x > max_x: max_x = x
+                    if y > max_y: max_y = y
+            if not found:
+                return
+            padx = pady = 50.0
+            min_x -= padx; min_y -= pady
+            max_x += padx; max_y += pady
+            # 读出纯文本，按 $EXTMIN/$EXTMAX/$LIMMIN/$LIMMAX 标记定位并改后续数值行
+            with open(path, 'r', encoding='latin-1') as f:
+                lines = f.read().splitlines()
+            self._patch_header_var(lines, '$EXTMIN', [min_x, min_y, 0.0])
+            self._patch_header_var(lines, '$EXTMAX', [max_x, max_y, 0.0])
+            self._patch_header_var(lines, '$LIMMIN', [min_x, min_y])
+            self._patch_header_var(lines, '$LIMMAX', [max_x, max_y])
+            with open(path, 'w', encoding='latin-1') as f:
+                f.write('\n'.join(lines) + '\n')
+        except Exception:
+            pass
+    
+    def _patch_header_var(self, lines, var_name, values):
+        """在 DXF 文本行中找到 `$VARNAME` (前一行是组码 9) 后续的 10/20(/30) 数值，
+        改写为 values 给出的值。values 的长度对应需要改的数值个数（2 或 3）。"""
+        idx = 0
+        n = len(lines)
+        for i in range(n - 1):
+            if lines[i].strip() == '9' and lines[i + 1].strip() == var_name:
+                idx = i + 2
+                break
+        if idx == 0:
+            return
+        # 后继成对出现 "组码 / 数值"；按需要改的组码依次匹配
+        want_codes = ['10', '20', '30'][:len(values)]
+        code_ptr = 0
+        k = idx
+        while code_ptr < len(want_codes) and k + 1 < n:
+            if lines[k].strip() == want_codes[code_ptr]:
+                lines[k + 1] = repr(float(values[code_ptr]))
+                code_ptr += 1
+                k += 2
+            else:
+                k += 2
+    
+    def _entity_xy(self, e):
+        """提取实体的(x,y)顶点序列（仅用于计算包围盒）"""
+        try:
+            dt = e.dxftype()
+            if dt == 'LWPOLYLINE':
+                return [(p[0], p[1]) for p in e]
+            if dt == 'POLYLINE':
+                return [(v.dxf.location.x, v.dxf.location.y) for v in e.vertices]
+            if dt == 'CIRCLE':
+                cx, cy = e.dxf.center.x, e.dxf.center.y; r = e.dxf.radius
+                return [(cx - r, cy - r), (cx + r, cy + r)]
+            if dt == 'LINE':
+                s, ee = e.dxf.start, e.dxf.end
+                return [(s.x, s.y), (ee.x, ee.y)]
+            if dt in ('TEXT', 'MTEXT'):
+                pt = e.dxf.insert
+                return [(pt.x, pt.y)]
+        except Exception:
+            return None
+        return None
+    
     def _draw_placement_with_unit(self, msp, placement, x0, y0, 
                                  layer_name, unit_map=None):
         """
-        绘制放置的图形（包括内部结构）
-        
-        Args:
-            msp: 模型空间
-            placement: 放置信息
-            x0, y0: 板材偏移
-            layer_name: 图层名
-            unit_map: 单元映射
+        绘制放置的图形（包括内部结构，正确处理旋转）
         """
         px = x0 + placement.x
         py = y0 + placement.y
@@ -148,20 +258,38 @@ class DxfWriter:
         
         if unit:
             outer = unit.outer
-            outer_bbox = outer.bbox
+            # 原始中心
+            orig_cx = (outer.bbox.x_min + outer.bbox.x_max) / 2
+            orig_cy = (outer.bbox.y_min + outer.bbox.y_max) / 2
             
-            orig_x = outer_bbox.x_min
-            orig_y = outer_bbox.y_min
+            if placement.rotated:
+                # 旋转90°：宽高互换
+                new_w = outer.bbox.height
+                new_h = outer.bbox.width
+            else:
+                new_w = outer.bbox.width
+                new_h = outer.bbox.height
             
-            dx = px - orig_x
-            dy = py - orig_y
+            # 新中心 = 放置位置(左下角) + 新尺寸的一半
+            new_cx = px + new_w / 2
+            new_cy = py + new_h / 2
             
-            # 绘制外层边界
-            self._draw_entity(msp, outer, dx, dy, layer_name)
+            if placement.rotated:
+                # 旋转90° CCW：先移到原中心，旋转，再移到新中心
+                def transform(x, y):
+                    dx = x - orig_cx
+                    dy = y - orig_cy
+                    # CCW: (dx, dy) -> (-dy, dx)
+                    return (new_cx - dy, new_cy + dx)
+            else:
+                # 只平移
+                def transform(x, y):
+                    return (x + (new_cx - orig_cx), y + (new_cy - orig_cy))
             
-            # 绘制内部图形
+            # 绘制外层边界和内部图形（共享同一变换）
+            self._draw_entity(msp, outer, transform, layer_name)
             for inner in unit.inner:
-                self._draw_entity(msp, inner, dx, dy, layer_name)
+                self._draw_entity(msp, inner, transform, layer_name)
         else:
             # 无单元信息，绘制矩形占位
             msp.add_lwpolyline([
@@ -172,20 +300,25 @@ class DxfWriter:
                 (px, py),
             ], dxfattribs={'layer': layer_name})
     
-    def _draw_entity(self, msp, entity, dx, dy, layer_name):
-        """根据实体类型绘制图形（应用偏移）"""
+    def _draw_entity(self, msp, entity, transform, layer_name):
+        """根据实体类型绘制图形（应用变换函数）
+        
+        layer_name 为默认图层（厚度图层）；
+        实际绘制时优先用实体自身的原始图层名（保留原色），不存在则回退默认。
+        """
         etype = entity.entity_type
-        coords = [(x + dx, y + dy) for x, y in entity.coordinates]
+        coords = [transform(x, y) for x, y in entity.coordinates]
+        # 优先使用实体原始图层（保留原色），否则用默认厚度图层
+        draw_layer = getattr(entity, 'layer', None) or layer_name
         
         if etype == 'CIRCLE':
             # CIRCLE 实体：用 add_circle 绘制更准确
             if len(coords) >= 36:
-                # 计算圆心和半径
                 cx = sum(p[0] for p in coords[:36]) / 36
                 cy = sum(p[1] for p in coords[:36]) / 36
                 r = ((coords[0][0] - cx) ** 2 + (coords[0][1] - cy) ** 2) ** 0.5
                 if r > 0.01:
-                    msp.add_circle((cx, cy), r, dxfattribs={'layer': layer_name})
+                    msp.add_circle((cx, cy), r, dxfattribs={'layer': draw_layer})
                     return
         
         # POLYLINE / LWPOLYLINE / LINE / POINT / 等：用 lwpolyline 绘制
@@ -193,7 +326,7 @@ class DxfWriter:
             # 只在闭合时添加闭合点，不强制闭合开放线段
             if entity.closed and coords[0] != coords[-1]:
                 coords.append(coords[0])
-            msp.add_lwpolyline(coords, dxfattribs={'layer': layer_name})
+            msp.add_lwpolyline(coords, dxfattribs={'layer': draw_layer})
     
     def create_nested_dxf(self, placements: List[Placement],
                           output_path: str,

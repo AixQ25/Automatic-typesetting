@@ -124,7 +124,15 @@ class RectNesting:
     
     def _find_best_position(self, rect: Rect, rotated: bool) -> Placement:
         """
-        查找最佳放置位置 - 改进的底部优先策略（含下滑优化）
+        查找最佳放置位置 - 列优先（纵向优先）策略
+        
+        规则：先在当前最左的列内沿 y 自下而上填满，该列放不下再开右边新列。
+        实现要点：候选位置按 (x, y) 升序排序（先左、后下），找到第一个可放位置后
+        再做“先下后左”的下滑优化，使同列尽量贴底、并回填左侧列的空隙。
+        
+        边距/间距模型：板内可用区为 [min,max]（已含 10mm 边距）；图形以“实际尺寸”
+        贴边，图形之间预留 10mm 间距。这样最右/最上的图形可贴边距，不再额外
+        浪费一个间距，提升利用率。
         
         Args:
             rect: 矩形
@@ -136,21 +144,20 @@ class RectNesting:
         actual_width = rect.height if rotated else rect.width
         actual_height = rect.width if rotated else rect.height
         
-        total_width = actual_width + self.spacing
-        total_height = actual_height + self.spacing
-        
-        if total_width > self.max_x - self.min_x:
+        # 可用区是否能容纳“实际尺寸”
+        if actual_width > self.max_x - self.min_x:
             return None
-        if total_height > self.max_y - self.min_y:
+        if actual_height > self.max_y - self.min_y:
             return None
         
-        candidates = self._generate_candidates(total_width, total_height)
-        candidates.sort(key=lambda p: (p[1], p[0]))
+        candidates = self._generate_candidates(actual_width, actual_height)
+        # 列优先：先按 x 升序（最左列优先），同 x 再按 y 升序（列内自下而上）
+        candidates.sort(key=lambda p: (p[0], p[1]))
         
         for x, y in candidates:
-            if self._can_place(x, y, total_width, total_height):
-                # 下滑优化：尽可能向左滑动，再向下滑动
-                final_x, final_y = self._slide_to_bottom_left(x, y, total_width, total_height)
+            if self._can_place(x, y, actual_width, actual_height):
+                # 先向下滑（贴列底），再向左滑（回填左侧空隙）
+                final_x, final_y = self._slide_down_left(x, y, actual_width, actual_height)
                 return Placement(
                     rect=rect,
                     x=final_x,
@@ -160,30 +167,31 @@ class RectNesting:
         
         return None
     
-    def _slide_to_bottom_left(self, x: float, y: float, width: float, height: float) -> Tuple[float, float]:
-        """下滑优化：将矩形尽可能向左、然后向下滑动"""
-        # 向左滑动
+    def _slide_down_left(self, x: float, y: float, w: float, h: float) -> Tuple[float, float]:
+        """下滑优化：先向下（贴列底），再向左（回填左侧空隙），再向下"""
         step = 1.0
-        while x - step >= self.min_x:
-            if not self._can_place(x - step, y, width, height):
-                break
-            x -= step
-        
-        # 向下滑动
         while y - step >= self.min_y:
-            if not self._can_place(x, y - step, width, height):
+            if not self._can_place(x, y - step, w, h):
                 break
             y -= step
-        
+        while x - step >= self.min_x:
+            if not self._can_place(x - step, y, w, h):
+                break
+            x -= step
+        while y - step >= self.min_y:
+            if not self._can_place(x, y - step, w, h):
+                break
+            y -= step
         return x, y
     
-    def _generate_candidates(self, width: float, height: float) -> List[Tuple[float, float]]:
+    def _generate_candidates(self, w: float, h: float) -> List[Tuple[float, float]]:
         """
-        生成候选放置位置
+        生成候选放置位置（BL 角点集合，与排布方向无关；
+        实际方向由调用方排序决定）
         
         Args:
-            width: 图形宽度（含间距）
-            height: 图形高度（含间距）
+            w: 图形实际宽度
+            h: 图形实际高度
             
         Returns:
             List[Tuple[float, float]]: 候选位置列表
@@ -193,69 +201,70 @@ class RectNesting:
         # 起始位置（左下角）
         candidates.append((self.min_x, self.min_y))
         
-        # 已放置图形的边缘位置
+        # 已放置图形的边缘角点
         for p in self.placements:
             px = p.x
             py = p.y
-            pw = p.actual_width + self.spacing
-            ph = p.actual_height + self.spacing
+            pw = p.actual_width + self.spacing    # 含右侧间距
+            ph = p.actual_height + self.spacing   # 含上方间距
             
-            # 右边
-            right_x = px + pw
-            if right_x + width <= self.max_x:
-                candidates.append((right_x, py))
-            
-            # 上边
+            # 上边（同列向上堆叠，列优先的核心候选）
             top_y = py + ph
-            if top_y + height <= self.max_y:
+            if top_y + h <= self.max_y:
                 candidates.append((px, top_y))
             
+            # 右边（开新列）
+            right_x = px + pw
+            if right_x + w <= self.max_x:
+                candidates.append((right_x, py))
+            
             # 右上角
-            if right_x + width <= self.max_x and top_y + height <= self.max_y:
+            if right_x + w <= self.max_x and top_y + h <= self.max_y:
                 candidates.append((right_x, top_y))
             
-            # 左边（贴合左边已放置图形）
-            left_x = px - width
+            # 左边（回填左侧列空隙）
+            left_x = px - w
             if left_x >= self.min_x:
                 candidates.append((left_x, py))
-                candidates.append((left_x, top_y))
+                if top_y + h <= self.max_y:
+                    candidates.append((left_x, top_y))
         
-        # 去重并排序
+        # 去重
         candidates = list(set(candidates))
-        
         return candidates
     
-    def _can_place(self, x: float, y: float, width: float, height: float) -> bool:
+    def _can_place(self, x: float, y: float, w: float, h: float) -> bool:
         """
         检查是否可以放置
         
+        边界用“实际尺寸”判定（可贴 10mm 边距）；
+        碰撞在两个实际矩形之间预留 spacing 间距。
+        
         Args:
-            x, y: 位置
-            width, height: 尺寸（含间距）
+            x, y: 位置（左下角）
+            w, h: 实际宽高
             
         Returns:
             bool: 是否可以放置
         """
-        # 检查边界
-        if x + width > self.max_x:
+        # 边界：实际尺寸须落在可用区内
+        if x < self.min_x or y < self.min_y:
             return False
-        if y + height > self.max_y:
+        if x + w > self.max_x + 1e-6:
             return False
-        if x < self.min_x:
-            return False
-        if y < self.min_y:
+        if y + h > self.max_y + 1e-6:
             return False
         
-        # 检查碰撞
+        # 碰撞：与每个已放置实际矩形之间须保留 spacing 间距
+        sp = self.spacing
         for p in self.placements:
             px = p.x
             py = p.y
-            pw = p.actual_width + self.spacing
-            ph = p.actual_height + self.spacing
-            
-            # 矩形碰撞检测
-            if (x < px + pw and x + width > px and
-                y < py + ph and y + height > py):
+            pw = p.actual_width
+            ph = p.actual_height
+            # 间距内视为碰撞
+            if (x < px + pw + sp and x + w + sp > px and
+                y < py + ph + sp and y + h + sp > py):
                 return False
         
         return True

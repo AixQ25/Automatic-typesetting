@@ -1,11 +1,19 @@
 """
 形状分组器
 根据位置将图形与厚度标注关联，按厚度分组
+
+核心规则：
+    每个图形按其中心点找最近的厚度标注，归入该标注对应厚度的分组。
+    每件独立判定（不做整批多数票合并），同批同厚度自然成立 ——
+    凡同尺寸、同图层、又落到同一标注范围下的零件会被同一个标注命中，从而统一厚度；
+    而同尺寸但落到其它标注范围下的零件会落到各自的厚度。这样既不会把本应分开的
+    不同厚度零件错并入一个组，也不会把同一标注下的同形零件拆散。
 """
 
 import sys
 import os
 from typing import List, Dict, Tuple, Optional
+from collections import defaultdict
 from dataclasses import dataclass
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -40,10 +48,10 @@ class ShapeGrouper:
                      thickness_labels: List[ThicknessLabel],
                      skip_labels: List[SkipLabel] = None) -> Dict[float, ShapeGroup]:
         """
-        将图形按厚度分组
+        将图形按厚度分组（每件按就近最近标注独立归属）
         
         Args:
-            shapes: 图形列表，每个图形包含 'handle', 'bbox', 'entity' 等信息
+            shapes: 图形列表，每个图形包含 'handle', 'bbox', 'entity', 'unit' 等
             thickness_labels: 厚度标注列表
             skip_labels: 跳过标注列表
             
@@ -57,38 +65,29 @@ class ShapeGrouper:
         skip_regions = self._get_skip_regions(skip_labels or [])
         
         # 过滤掉在跳过区域内的图形
-        filtered_shapes = []
-        for shape in shapes:
-            if not self._is_in_skip_region(shape, skip_regions):
-                filtered_shapes.append(shape)
+        filtered_shapes = [s for s in shapes
+                           if not self._is_in_skip_region(s, skip_regions)]
         
-        # 为每个图形找到对应的厚度标注
-        groups = {}
-        
+        # 每件按就近最近标注直接归属
+        groups: Dict[float, ShapeGroup] = {}
         for shape in filtered_shapes:
             bbox = shape.get('bbox')
             if not bbox:
                 continue
-            
-            # 图形中心坐标
             shape_x = (bbox.x_min + bbox.x_max) / 2
             shape_y = (bbox.y_min + bbox.y_max) / 2
-            
-            # 找到最近的厚度标注
-            best_label = self._find_nearest_label(
-                shape_x, shape_y, thickness_labels
-            )
-            
-            if best_label:
-                thickness = best_label.value
-                if thickness not in groups:
-                    groups[thickness] = ShapeGroup(
-                        thickness=thickness,
-                        shapes=[],
-                        label_x=best_label.x,
-                        label_y=best_label.y
-                    )
-                groups[thickness].shapes.append(shape)
+            best_label = self._find_nearest_label(shape_x, shape_y, thickness_labels)
+            if best_label is None:
+                continue
+            th = best_label.value
+            if th not in groups:
+                groups[th] = ShapeGroup(
+                    thickness=th,
+                    shapes=[],
+                    label_x=best_label.x,
+                    label_y=best_label.y,
+                )
+            groups[th].shapes.append(shape)
         
         return groups
     

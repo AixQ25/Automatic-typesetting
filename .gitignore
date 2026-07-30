@@ -5,3 +5,5 @@ __pycache__/
 *.tmp
 *.dwl
 temp/
+test_diag*.dxf
+排版结果*.dxf
