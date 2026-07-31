@@ -1,5 +1,5 @@
 ;;; ============================================================
-;;;  NEST v20260731-0855  -  AutoCAD 2007 / Win7 32bit
+;;;  NEST v20260731-1000  -  AutoCAD 2007 / Win7 32bit
 ;;;  ONLY load:  (load "D:/NEST.LSP")
 ;;;  then type:  NEST
 ;;;  Verify load message: [NEST] loaded. Command: NEST
@@ -7,7 +7,7 @@
 
 (vl-load-com)
 
-;;; ---------- 默认参数 ----------
+;;; ---------- ?????? ----------
 (setq *NEST-BOARD-W*     600.0)
 (setq *NEST-BOARD-H*     850.0)
 (setq *NEST-SPACING*      10.0)
@@ -26,7 +26,7 @@
 (setq *NEST-HALF-PI*       (atan 1.0 0.0))
 
 
-;;; ---------- 主命令 ----------
+;;; ---------- ?????? ----------
 (defun C:NEST ( / *error* ss ents units bbox base-x base-y placements nboards oldcmd)
   (defun *error* (msg)
     (if oldcmd (setvar "CMDECHO" oldcmd))
@@ -73,7 +73,10 @@
   (princ))
 
 
-;;; ---------- 提取：VLA bbox，保留 ename ----------
+;;; ---------- ?????VLA bbox?????? ename ----------
+(defun C:NS () (C:NEST))
+
+
 (defun nest-get-entities (ss / i n out rec)
   (setq i 0 n (sslength ss) out '())
   (while (< i n)
@@ -114,7 +117,7 @@
               (cons 'idx idx))))))
 
 
-;;; ---------- 几何 ----------
+;;; ---------- ???? ----------
 (defun nest-rec-bbox (rec)
   (list (cdr (assoc 'ox rec))
         (cdr (assoc 'oy rec))
@@ -153,7 +156,7 @@
   (if all all '(0.0 0.0 0.0 0.0)))
 
 
-;;; ---------- 整体识别：包含 + 邻近 并查集 ----------
+;;; ---------- ??????????? + ??? ???鼯 ----------
 (defun nest-should-merge (b1 b2 / gap)
   (setq gap *NEST-CLUSTER-GAP*)
   (or (nest-bbox-contains b1 b2)
@@ -254,7 +257,7 @@
       (reverse units))))
 
 
-;;; ---------- 排样 ----------
+;;; ---------- ???? ----------
 (defun nest-pack (units bw bh sp mg /
                   sorted remaining boards safe bidx res placed rem1)
   (setq sorted (nest-sort-area units)
@@ -278,21 +281,18 @@
   (reverse boards))
 
 (defun nest-pack-board (remaining bw bh sp mg /
-                        minx miny maxx maxy out newrem rec w h p1 p rot)
+                        minx miny maxx maxy out newrem rec w h best rot)
   (setq minx mg miny mg
         maxx (- bw mg) maxy (- bh mg)
         out '() newrem '())
   (foreach rec remaining
     (setq w (cdr (assoc 'w rec))
           h (cdr (assoc 'h rec))
-          p1 (nest-find-pos w h minx miny maxx maxy sp out))
-    (if p1
-      (setq p p1 rot nil)
+          best (nest-place-best w h minx miny maxx maxy sp out))
+    (if best
       (progn
-        (setq p1 (nest-find-pos h w minx miny maxx maxy sp out))
-        (if p1 (setq p p1 rot T) (setq p nil))))
-    (if p
-      (setq out (cons (list rec (car p) (cadr p) rot) out))
+        (setq rot (car best))
+        (setq out (cons (list rec (nth 1 best) (nth 2 best) rot) out)))
       (setq newrem (cons rec newrem))))
   (cons (reverse out) (reverse newrem)))
 
@@ -304,6 +304,22 @@
           units))
   (mapcar 'cadr
           (vl-sort pairs '(lambda (a b) (> (car a) (car b))))))
+
+(defun nest-place-best (w h minx miny maxx maxy sp placed /
+                        p0 rot0 p90 rot90)
+  ;; Try both 0/90, pick whichever slides lower (row-first)
+  (setq p0  (nest-find-pos w h minx miny maxx maxy sp placed) rot0 nil)
+  (setq p90 (nest-find-pos h w minx miny maxx maxy sp placed) rot90 T)
+  (cond
+    ((and p0 p90)
+      (if (or (< (cadr p90) (cadr p0))
+              (and (equal (cadr p90) (cadr p0) *NEST-EPS*)
+                   (< (car p90) (car p0))))
+        (list rot90 (car p90) (cadr p90))
+        (list rot0  (car p0)  (cadr p0))))
+    (p0  (list rot0  (car p0)  (cadr p0)))
+    (p90 (list rot90 (car p90) (cadr p90)))
+    (t nil)))
 
 (defun nest-find-pos (w h minx miny maxx maxy sp placed /
                       cands px py pw ph top right c found)
@@ -326,12 +342,13 @@
         (if (<= (+ top h) maxy)
           (setq cands (cons (list (- px w) top) cands))))))
   (setq cands (nest-uniq cands))
+  ;; row-first: smaller y first, then smaller x
   (setq cands
         (vl-sort cands
                  '(lambda (a b)
-                    (or (< (car a) (car b))
-                        (and (equal (car a) (car b) *NEST-EPS*)
-                             (< (cadr a) (cadr b)))))))
+                    (or (< (cadr a) (cadr b))
+                        (and (equal (cadr a) (cadr b) *NEST-EPS*)
+                             (< (car a) (car b)))))))
   (setq found nil)
   (while (and cands (not found))
     (setq c (car cands) cands (cdr cands))
@@ -388,7 +405,7 @@
   (reverse out))
 
 
-;;; ---------- 画板 + 移动原实体 ----------
+;;; ---------- ???? + ??????? ----------
 (defun nest-draw (placements bx by bw bh /
                   cur-x cur-y row-max cur-board bid)
   (if (not placements)
@@ -453,7 +470,7 @@
       (vla-move obj origin dest))))
 
 
-;;; ---------- 图层 ----------
+;;; ---------- ??? ----------
 (defun nest-ensure-layer (name color)
   (if (not (tblsearch "LAYER" name))
     (entmake (list (cons 0 "LAYER")
@@ -465,6 +482,6 @@
                    (cons 6 "CONTINUOUS"))))
   t)
 
-(princ "\n[NEST] loaded. Command: NEST")
+(princ "\n[NEST] loaded. Command: NS  (or NEST)")
 (princ "\n[NEST] only use: (load \"D:/NEST.LSP\")")
 (princ)
