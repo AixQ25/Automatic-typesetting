@@ -156,7 +156,7 @@
   (if all all '(0.0 0.0 0.0 0.0)))
 
 
-;;; ---------- ??????????? + ??? ???χω ----------
+;;; ---------- ??????????? + ??? ????? ----------
 (defun nest-should-merge (b1 b2 / gap)
   (setq gap *NEST-CLUSTER-GAP*)
   (or (nest-bbox-contains b1 b2)
@@ -307,16 +307,24 @@
 
 (defun nest-place-best (w h minx miny maxx maxy sp placed /
                         p0 rot0 p90 rot90)
-  ;; Try both 0/90, pick whichever slides lower (row-first)
+  ;; Try both 0/90, pick whichever slides lower (row-first).
+  ;; When same position: prefer smaller actual width (fits more per row).
   (setq p0  (nest-find-pos w h minx miny maxx maxy sp placed) rot0 nil)
   (setq p90 (nest-find-pos h w minx miny maxx maxy sp placed) rot90 T)
   (cond
     ((and p0 p90)
-      (if (or (< (cadr p90) (cadr p0))
-              (and (equal (cadr p90) (cadr p0) *NEST-EPS*)
-                   (< (car p90) (car p0))))
-        (list rot90 (car p90) (cadr p90))
-        (list rot0  (car p0)  (cadr p0))))
+      (cond
+        ((< (cadr p90) (cadr p0))
+          (list rot90 (car p90) (cadr p90)))
+        ((and (equal (cadr p90) (cadr p0) *NEST-EPS*)
+              (< (car p90) (car p0)))
+          (list rot90 (car p90) (cadr p90)))
+        ((and (equal (cadr p90) (cadr p0) *NEST-EPS*)
+              (equal (car p90) (car p0) *NEST-EPS*)
+              (< h w))
+          (list rot90 (car p90) (cadr p90)))
+        (t
+          (list rot0  (car p0)  (cadr p0)))))
     (p0  (list rot0  (car p0)  (cadr p0)))
     (p90 (list rot90 (car p90) (cadr p90)))
     (t nil)))
